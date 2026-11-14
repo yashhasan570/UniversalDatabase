@@ -1,0 +1,461 @@
+import dayjs from 'dayjs';
+import {
+  ClientType,
+  convertToTargetFormat,
+  FormulaDataTypes,
+  getDateFormat,
+  JSEPNode,
+  UITypes,
+} from 'universaldatabase-sdk';
+import commonFns, {
+  escapePlaceholders,
+  extractDatetimeFormat,
+  jsonPathFromLiteral,
+  safeDateAddUnitSQL,
+  validateDateAddUnit,
+} from './commonFns';
+import type { MapFnArgs } from '../mapFunctionName';
+import type { WorkdaySqlDialect } from '~/db/functionMappings/workday';
+import { convertUnits } from '~/helpers/convertUnits';
+import {
+  getWeekdayByText,
+  getWeekStartOffsetSunday,
+} from '~/helpers/formulaFnHelper';
+import { getDatetimeFormatHandler } from '~/db/datetime-format';
+import { workdayDiffFn, workdayFn } from '~/db/functionMappings/workday';
+
+// julianday('1900-01-01')
+const SQLITE_JULIAN_1900 = 2415020.5;
+const SQLITE_BLANKS = `' ' || char(9, 10, 13)`;
+
+const sqliteWorkdayDialect: WorkdaySqlDialect = {
+  dayNumber: (sql) =>
+    `CAST(round(julianday(date(${sql})) - ${SQLITE_JULIAN_1900}) AS INTEGER)`,
+  fromDayNumber: (sql) => `date(${SQLITE_JULIAN_1900} + (${sql}))`,
+  dateLiteral: (isoDate) => `'${isoDate}'`,
+  intDiv: (a, b) => `(${a} / ${b})`,
+  mod: (a, b) => `(${a} % ${b})`,
+  // CAST takes the leading number of a text value and truncates toward zero
+  toInteger: (sql) => `CAST(${sql} AS INTEGER)`,
+  // splits on commas with a recursive CTE; the julianday round trip keeps
+  // real dates only (date() alone accepts e.g. 2026-02-30)
+  holidayDays: (sql) =>
+    `(WITH RECURSIVE wds(t, r) AS (SELECT NULL, CAST(${sql} AS TEXT) || ',' UNION ALL SELECT trim(substr(r, 1, instr(r, ',') - 1), ${SQLITE_BLANKS}), substr(r, instr(r, ',') + 1) FROM wds WHERE r <> '') SELECT CASE WHEN length(t) = 10 AND date(julianday(t)) = t THEN CAST(round(julianday(t) - ${SQLITE_JULIAN_1900}) AS INTEGER) END AS hn FROM wds)`,
+  // the flattener skips a subquery with an OFFSET
+  noInline: ' LIMIT -1 OFFSET 0',
+};
+
+// scalar min() / max() take two or more arguments: min(x) is the aggregate
+const minMaxFn = async ({ fn, knex, pt }: MapFnArgs) =>
+  pt.arguments?.length === 1
+    ? { builder: knex.raw(`(${(await fn(pt.arguments[0])).builder})`) }
+    : undefined;
+
+const sqlite3 = {
+  ...commonFns,
+  // as pg: COUNT counts number-typed arguments, COUNTA non-blank ones
+  COUNT: async ({ fn, knex, pt }: MapFnArgs) => {
+    const builders = await Promise.all(pt.arguments.map((arg) => fn(arg)));
+    const parts = pt.arguments.map((arg, i) =>
+      // booleans (checkboxes, comparisons) are integers here but not on pg
+      arg.referencedColumn?.uidt === UITypes.Checkbox ||
+      [
+        FormulaDataTypes.BOOLEAN,
+        FormulaDataTypes.COND_EXP,
+        FormulaDataTypes.LOGICAL,
+      ].includes(arg.dataType)
+        ? knex.raw('0')
+        : knex.raw(
+            `CASE WHEN typeof(?) IN ('integer', 'real') THEN 1 ELSE 0 END`,
+            [builders[i].builder],
+          ),
+    );
+    return { builder: knex.raw(parts.map(() => '?').join(' + '), parts) };
+  },
+  COUNTA: async ({ fn, knex, pt }: MapFnArgs) => {
+    const parts = (await Promise.all(pt.arguments.map((arg) => fn(arg)))).map(
+      ({ builder }) =>
+        knex.raw(
+          `CASE WHEN ? IS NOT NULL AND CAST(? AS TEXT) <> '' THEN 1 ELSE 0 END`,
+          [builder, builder],
+        ),
+    );
+    return { builder: knex.raw(parts.map(() => '?').join(' + '), parts) };
+  },
+  LEN: 'LENGTH',
+  MIN: minMaxFn,
+  MAX: minMaxFn,
+  async CEILING(args) {
+    return {
+      builder: args.knex.raw(
+        `round(${(await args.fn(args.pt.arguments[0])).builder} + 0.5)`,
+      ),
+    };
+  },
+  async FLOOR(args) {
+    return {
+      builder: args.knex.raw(
+        `round(${(await args.fn(args.pt.arguments[0])).builder} - 0.5)`,
+      ),
+    };
+  },
+  MOD: async (args: MapFnArgs) => {
+    return args.fn({
+      type: 'BinaryExpression',
+      operator: '%',
+      left: args.pt.arguments[0],
+      right: args.pt.arguments[1],
+    });
+  },
+  async REPEAT(args: MapFnArgs) {
+    return {
+      builder: args.knex.raw(
+        `replace(printf('%.' || ${
+          (await args.fn(args.pt.arguments[1])).builder
+        } || 'c', '/'),'/',${(await args.fn(args.pt.arguments[0])).builder})`,
+      ),
+    };
+  },
+  NOW: (args: MapFnArgs) => {
+    return {
+      builder: args.knex.raw(`DATETIME('now', 'localtime')`),
+    };
+  },
+  SEARCH: 'INSTR',
+  async INT(args: MapFnArgs) {
+    return {
+      builder: args.knex.raw(
+        `CAST(${(await args.fn(args.pt.arguments[0])).builder} as INTEGER)`,
+      ),
+    };
+  },
+  LEFT: async (args: MapFnArgs) => {
+    const source = (await args.fn(args.pt.arguments[0])).builder;
+    const length = (await args.fn(args.pt.arguments[1])).builder;
+    return {
+      builder: args.knex.raw(`SUBSTR(?,1,?)`, [source, length]),
+    };
+  },
+  RIGHT: async (args: MapFnArgs) => {
+    const source = (await args.fn(args.pt.arguments[0])).builder;
+    const length = (await args.fn(args.pt.arguments[1])).builder;
+    return {
+      builder: args.knex.raw(`SUBSTR(?,-(?))`, [source, length]),
+    };
+  },
+  MID: 'SUBSTR',
+  FLOAT: async (args: MapFnArgs) => {
+    return {
+      builder: args.knex
+        .raw(`CAST(${(await args.fn(args.pt.arguments[0])).builder} as FLOAT)`)
+        .wrap('(', ')'),
+    };
+  },
+  DATEADD: async ({ fn, knex, pt }: MapFnArgs) => {
+    const source = (await fn(pt.arguments[0])).builder;
+    const amountBuilder = (await fn(pt.arguments[1])).builder;
+    const dateIN = Number(
+      typeof amountBuilder === 'object' && amountBuilder.toQuery
+        ? amountBuilder.toQuery()
+        : amountBuilder,
+    );
+    // A field reference or expression isn't a literal number, so build the
+    // modifier's amount in SQL instead of inlining NaN
+    const isLiteralAmount = !Number.isNaN(dateIN);
+    const amountSql = knex.raw(`CAST(? AS TEXT) || ' '`, [amountBuilder]);
+
+    if (pt.arguments[2].type === 'Literal') {
+      let dateModifier = (await fn(pt.arguments[2])).builder;
+      if (typeof dateModifier === 'object' && dateModifier.toQuery) {
+        dateModifier = dateModifier.toQuery();
+      }
+      const unit = validateDateAddUnit(String(dateModifier));
+      if (!isLiteralAmount) {
+        const fullModifier = knex.raw(`? || '${unit}'`, [amountSql]);
+        return {
+          builder: knex.raw(
+            `CASE
+        WHEN ? LIKE '%:%' THEN
+          STRFTIME('%Y-%m-%dT%H:%M:%fZ', DATETIME(?, 'utc', ?))
+        ELSE
+          DATE(?, ?)
+        END`,
+            [source, source, fullModifier, source, fullModifier],
+          ),
+        };
+      }
+      const fullModifierRaw = `${dateIN > 0 ? '+' : ''}${dateIN} ${unit}`;
+
+      return {
+        builder: knex.raw(
+          `CASE
+        WHEN :source LIKE '%:%' THEN
+          STRFTIME('%Y-%m-%dT%H:%M:%fZ', DATETIME(:source, 'utc', ':fullModifier'))
+        ELSE
+          DATE(:source, ':fullModifier')
+        END`,
+          {
+            source,
+            fullModifier: knex.raw(fullModifierRaw),
+          },
+        ),
+      };
+    }
+
+    // Dynamic unit (field reference) — build modifier as a SQL expression
+    // with proper ? bindings so knex nests the Raw correctly
+    const unitBuilder = (await fn(pt.arguments[2])).builder;
+    const safeUnit = safeDateAddUnitSQL(knex, unitBuilder);
+    const fullModifier = isLiteralAmount
+      ? knex.raw(`'${dateIN > 0 ? '+' : ''}${dateIN} ' || ?`, [safeUnit])
+      : knex.raw(`? || ?`, [amountSql, safeUnit]);
+
+    return {
+      builder: knex.raw(
+        `CASE
+      WHEN ? LIKE '%:%' THEN
+        STRFTIME('%Y-%m-%dT%H:%M:%fZ', DATETIME(?, 'utc', ?))
+      ELSE
+        DATE(?, ?)
+      END`,
+        [source, source, fullModifier, source, fullModifier],
+      ),
+    };
+  },
+  DATETIME_DIFF: async ({ fn, knex, pt }: MapFnArgs) => {
+    let datetime_expr1 = (await fn(pt.arguments[0])).builder;
+    let datetime_expr2 = (await fn(pt.arguments[1])).builder;
+    // JULIANDAY takes YYYY-MM-DD
+    if (datetime_expr1.sql === '?' && datetime_expr1.bindings?.[0]) {
+      datetime_expr1 = `'${convertToTargetFormat(
+        datetime_expr1.bindings[0],
+        getDateFormat(datetime_expr1.bindings[0]),
+        'YYYY-MM-DD',
+      )}'`;
+    }
+
+    if (datetime_expr2.sql === '?' && datetime_expr2.bindings?.[0]) {
+      datetime_expr2 = `'${convertToTargetFormat(
+        datetime_expr2.bindings[0],
+        getDateFormat(datetime_expr2.bindings[0]),
+        'YYYY-MM-DD',
+      )}'`;
+    }
+
+    const rawUnit = pt.arguments[2]
+      ? (await fn(pt.arguments[2])).builder.bindings[0]
+      : 'seconds';
+    let sql;
+    const unit = convertUnits(rawUnit, 'sqlite');
+    switch (unit) {
+      case 'seconds':
+        sql = `(strftime('%s', ${datetime_expr1}) - strftime('%s', ${datetime_expr2}))`;
+        break;
+      case 'minutes':
+        sql = `(strftime('%s', ${datetime_expr1}) - strftime('%s', ${datetime_expr2})) / 60`;
+        break;
+      case 'hours':
+        sql = `(strftime('%s', ${datetime_expr1}) - strftime('%s', ${datetime_expr2})) / 3600`;
+        break;
+      case 'milliseconds':
+        sql = `(strftime('%s', ${datetime_expr1}) - strftime('%s', ${datetime_expr2})) * 1000`;
+        break;
+      case 'weeks':
+        sql = `ROUND((JULIANDAY(${datetime_expr1}) - JULIANDAY(${datetime_expr2})) / 7)`;
+        break;
+      case 'months':
+        sql = `(strftime('%Y', ${datetime_expr1}) - strftime('%Y', ${datetime_expr2})) * 12 + (strftime('%m', ${datetime_expr1}) - strftime('%m', ${datetime_expr2})) `;
+        break;
+      case 'quarters':
+        sql = `(strftime('%Y', ${datetime_expr1}) - strftime('%Y', ${datetime_expr2})) * 4 + (strftime('%m', ${datetime_expr1}) - strftime('%m', ${datetime_expr2})) / 3`;
+        break;
+      case 'years':
+        sql = `CASE
+                WHEN (${datetime_expr2} < ${datetime_expr1}) THEN
+                (
+                  (strftime('%Y', ${datetime_expr1}) - strftime('%Y', ${datetime_expr2}))
+                  - (strftime('%m', ${datetime_expr1}) < strftime('%m', ${datetime_expr2})
+                  OR (strftime('%m', ${datetime_expr1}) = strftime('%m', ${datetime_expr2})
+                  AND strftime('%d', ${datetime_expr1}) < strftime('%d', ${datetime_expr2})))
+                )
+                WHEN (${datetime_expr2} > ${datetime_expr1}) THEN
+                -1 * (
+                  (strftime('%Y', ${datetime_expr2}) - strftime('%Y', ${datetime_expr1}))
+                  - (strftime('%m', ${datetime_expr2}) < strftime('%m', ${datetime_expr1})
+                  OR (strftime('%m', ${datetime_expr2}) = strftime('%m', ${datetime_expr1})
+                  AND strftime('%d', ${datetime_expr2}) < strftime('%d', ${datetime_expr1})))
+                )
+                ELSE 0
+              END`;
+        break;
+      case 'days':
+        sql = `JULIANDAY(${datetime_expr1}) - JULIANDAY(${datetime_expr2})`;
+        break;
+      default:
+        sql = '';
+    }
+    return { builder: knex.raw(`ROUND(${sql})`) };
+  },
+  DATETIME_FORMAT: async ({ fn, knex, pt }: MapFnArgs) => {
+    const format = extractDatetimeFormat(pt);
+    const dateExpr = (await fn(pt?.arguments[0])).builder;
+    return {
+      builder: knex.raw(
+        escapePlaceholders(
+          getDatetimeFormatHandler(ClientType.SQLITE).build(
+            `(${dateExpr})`,
+            format,
+          ),
+        ),
+      ),
+    };
+  },
+  WORKDAY: workdayFn(sqliteWorkdayDialect),
+  WORKDAY_DIFF: workdayDiffFn(sqliteWorkdayDialect),
+  WEEKDAY: async ({ fn, knex, pt }: MapFnArgs) => {
+    // strftime('%w', date) - day of week 0 - 6 with Sunday == 0
+    // WEEKDAY() returns an index from 0 to 6 for Monday to Sunday
+    return {
+      builder: knex.raw(
+        `(strftime('%w', ${
+          pt.arguments[0].type === 'Literal'
+            ? `'${dayjs((await fn(pt.arguments[0])).builder).format(
+                'YYYY-MM-DD',
+              )}'`
+            : (await fn(pt.arguments[0])).builder
+        }) - 1 - ${getWeekdayByText(pt?.arguments[1]?.value)} % 7 + 7) % 7`,
+      ),
+    };
+  },
+  WEEKNUM: async ({ fn, knex, pt }: MapFnArgs) => {
+    // Excel-compatible WEEKNUM: week 1 is the week containing Jan 1, weeks start
+    // on Sunday by default. strftime('%w') is 0 (Sunday) .. 6 (Saturday);
+    // strftime('%j') is the 1-based day of the year.
+    const source =
+      pt.arguments[0].type === 'Literal'
+        ? `'${dayjs((await fn(pt.arguments[0])).builder).format('YYYY-MM-DD')}'`
+        : `(${(await fn(pt.arguments[0])).builder})`;
+    const startSun = getWeekStartOffsetSunday(pt?.arguments[1]?.value);
+    const doy = `CAST(strftime('%j', ${source}) AS INTEGER)`;
+    const dow = `CAST(strftime('%w', ${source}) AS INTEGER)`;
+    return {
+      builder: knex.raw(
+        `CAST((((${doy} - 1) + ((((${dow} - (${doy} - 1) - ${startSun}) % 7) + 7) % 7)) / 7) + 1 AS INTEGER)`,
+      ),
+    };
+  },
+  DAY: async ({ fn, knex, pt }: MapFnArgs) => {
+    return {
+      builder: knex.raw(
+        `CAST(strftime('%d', (${
+          (await fn(pt?.arguments[0])).builder
+        })) AS INTEGER)`,
+      ),
+    };
+  },
+  MONTH: async ({ fn, knex, pt }: MapFnArgs) => {
+    return {
+      builder: knex.raw(
+        `CAST(strftime('%m', (${
+          (await fn(pt?.arguments[0])).builder
+        })) AS INTEGER)`,
+      ),
+    };
+  },
+  YEAR: async ({ fn, knex, pt }: MapFnArgs) => {
+    return {
+      builder: knex.raw(
+        `CAST(strftime('%Y', (${
+          (await fn(pt?.arguments[0])).builder
+        })) AS INTEGER)`,
+      ),
+    };
+  },
+  HOUR: async ({ fn, knex, pt }: MapFnArgs) => {
+    return {
+      builder: knex.raw(
+        `CAST(strftime('%H', (${
+          (await fn(pt?.arguments[0])).builder
+        })) AS INTEGER)`,
+      ),
+    };
+  },
+  AND: async (args: MapFnArgs) => {
+    const predicates = (args.pt.arguments.map(() => '?') as string[]).join(
+      ' AND ',
+    );
+
+    const parsedArguments = await Promise.all(
+      args.pt.arguments.map(async (ar) => {
+        const argsStr = (await args.fn(ar, '', 'AND')).builder;
+        return { builder: argsStr };
+      }),
+    );
+
+    const clause = args.knex
+      .raw(
+        predicates,
+        parsedArguments.map((a) => a.builder),
+      )
+      .wrap('(', ')');
+
+    return {
+      builder: args.knex.raw(`CASE WHEN ? THEN 1 ELSE 0 END `, [clause]),
+    };
+  },
+  OR: async (args: MapFnArgs) => {
+    const predicates = (args.pt.arguments.map(() => '?') as string[]).join(
+      ' OR ',
+    );
+
+    const parsedArguments = await Promise.all(
+      args.pt.arguments.map(async (ar) => {
+        const argsStr = (await args.fn(ar, '', 'OR')).builder;
+        return { builder: argsStr };
+      }),
+    );
+
+    const clause = args.knex
+      .raw(
+        predicates,
+        parsedArguments.map((a) => a.builder),
+      )
+      .wrap('(', ')');
+
+    return {
+      builder: args.knex.raw(`CASE WHEN ? THEN 1 ELSE 0 END `, [clause]),
+    };
+  },
+  async JSON_EXTRACT(args: MapFnArgs) {
+    const source = (await args.fn(args.pt.arguments[0])).builder;
+
+    // When the path is a string literal, prebuild the full jsonpath and bind
+    // as a single parameter — avoids leaving `'$' ||` adjacent in the SQL,
+    // which gets corrupted by JS String.prototype.replace special patterns
+    // (the `$'` and `` $` `` pairs) when knex inlines this raw inside named-
+    // binding wrappers like VALUE(). See universaldatabase/universaldatabase#12695.
+    const pathArg = args.pt.arguments[1];
+    if (
+      pathArg?.type === JSEPNode.LITERAL &&
+      typeof pathArg.value === 'string'
+    ) {
+      const path = jsonPathFromLiteral(pathArg.value);
+      return {
+        builder: args.knex.raw(
+          `CASE WHEN json_valid(?) = 1 AND ? NOT LIKE '%[-%' THEN json_extract(?, ?) ELSE NULL END`,
+          [source, path, source, path],
+        ),
+      };
+    }
+
+    const needle = (await args.fn(pathArg)).builder;
+    return {
+      builder: args.knex.raw(
+        `CASE WHEN json_valid(?) = 1 AND ('$' || ltrim(?, '$')) NOT LIKE '%[-%' THEN json_extract(?, '$' || ltrim(?, '$')) ELSE NULL END`,
+        [source, needle, source, needle],
+      ),
+    };
+  },
+};
+
+export default sqlite3;

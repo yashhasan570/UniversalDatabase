@@ -1,0 +1,495 @@
+import { Injectable } from '@nestjs/common';
+import {
+  AppEvents,
+  EventType,
+  isVirtualCol,
+  SortOrderBy,
+  UITypes,
+} from 'universaldatabase-sdk';
+import Universal Database from 'src/Universal Database';
+import type { SortReqType } from 'universaldatabase-sdk';
+import type { NcContext, NcRequest } from '~/interface/config';
+import type { MetaService } from '~/meta/meta.service';
+import type { LinkToAnotherRecordColumn, LookupColumn } from '~/models';
+import {
+  type ViewWebhookManager,
+  ViewWebhookManagerBuilder,
+} from '~/utils/view-webhook-manager';
+import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import { validatePayload } from '~/helpers';
+import { assertLookupSortLimitLicensed } from '~/helpers/lookupSortLimitGate';
+import { NcError } from '~/helpers/catchError';
+import { assertViewConfigEditable } from '~/helpers/viewLockHelpers';
+import { Column, Sort, View } from '~/models';
+import UniversalDatabaseSocket from '~/socket/UniversalDatabaseSocket';
+
+@Injectable()
+export class SortsService {
+  constructor(protected readonly appHooksService: AppHooksService) {}
+
+  async sortGet(context: NcContext, param: { sortId: string }) {
+    return Sort.get(context, param.sortId);
+  }
+
+  async sortDelete(
+    context: NcContext,
+    param: {
+      sortId: string;
+      req: NcRequest;
+      viewWebhookManager?: ViewWebhookManager;
+    },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked();
+    }
+
+    const sort = await Sort.get(context, param.sortId, ncMeta);
+
+    if (!sort) {
+      NcError.badRequest('Sort not found');
+    }
+
+    const column = await Column.get(
+      context,
+      { colId: sort.fk_column_id },
+      ncMeta,
+    );
+
+    // Lookup-scoped sort (fk_lookup_col_id, no view): no view webhooks/hooks.
+    if (!sort.fk_view_id) {
+      await Sort.delete(context, param.sortId, ncMeta);
+      UniversalDatabaseSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: { action: 'sort_delete', payload: sort },
+        },
+        context.socket_id,
+      );
+      return true;
+    }
+
+    const view = await View.get(context, sort.fk_view_id, false, ncMeta);
+    assertViewConfigEditable(context, view, param.req);
+
+    const viewWebhookManager =
+      param.viewWebhookManager ??
+      (
+        await (
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
+            view.fk_model_id,
+          )
+        ).withViewId(view.id)
+      ).forUpdate();
+
+    await Sort.delete(context, param.sortId, ncMeta);
+
+    this.appHooksService.emit(AppEvents.SORT_DELETE, {
+      sort,
+      req: param.req,
+      view,
+      column,
+      context,
+    });
+
+    UniversalDatabaseSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'sort_delete',
+          payload: sort,
+        },
+      },
+      context.socket_id,
+    );
+
+    if (!param.viewWebhookManager) {
+      (await viewWebhookManager.withNewViewId(view.id)).emit();
+    }
+
+    return true;
+  }
+
+  async sortUpdate(
+    context: NcContext,
+    param: {
+      sortId: any;
+      sort: SortReqType;
+      req: NcRequest;
+      viewWebhookManager?: ViewWebhookManager;
+    },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked();
+    }
+
+    validatePayload('swagger.json#/components/schemas/SortReq', param.sort);
+
+    if (param.sort.fk_column_id) {
+      const col = await Column.get(
+        context,
+        { colId: param.sort.fk_column_id },
+        ncMeta,
+      );
+      if (
+        col?.colOptions?.error &&
+        !(col?.colOptions as { data_error?: boolean }).data_error
+      ) {
+        NcError.get(context).badRequest(
+          `Cannot use column '${col.title}' in sort: ${col.colOptions.error}`,
+        );
+      }
+    }
+
+    const sort = await Sort.get(context, param.sortId, ncMeta);
+
+    if (!sort) {
+      NcError.badRequest('Sort not found');
+    }
+
+    if (sort.fk_lookup_col_id && param.sort.fk_column_id) {
+      const lookupCol = await Column.get(
+        context,
+        { colId: sort.fk_lookup_col_id },
+        ncMeta,
+      );
+      if (lookupCol) {
+        await this.validateLookupSortColumn(
+          context,
+          lookupCol,
+          param.sort.fk_column_id,
+          ncMeta,
+        );
+      }
+    }
+
+    const targetColumnId = param.sort.fk_column_id ?? sort.fk_column_id;
+    if (param.sort.order_by === SortOrderBy.OPTION_ORDER) {
+      await this.validateSortOrderBy(
+        context,
+        param.sort,
+        targetColumnId,
+        ncMeta,
+        !!sort.fk_lookup_col_id,
+      );
+    } else if (
+      param.sort.order_by === undefined &&
+      sort.order_by === SortOrderBy.OPTION_ORDER &&
+      param.sort.fk_column_id &&
+      param.sort.fk_column_id !== sort.fk_column_id
+    ) {
+      // Switching the field away from a SingleSelect drops option order.
+      const newColumn = await Column.get(
+        context,
+        { colId: param.sort.fk_column_id },
+        ncMeta,
+      );
+      if (newColumn?.uidt !== UITypes.SingleSelect) {
+        param.sort = { ...param.sort, order_by: null };
+      }
+    }
+
+    const column = await Column.get(
+      context,
+      { colId: sort.fk_column_id },
+      ncMeta,
+    );
+
+    // Lookup-scoped sort (fk_lookup_col_id, no view): there is no view to drive
+    // view webhooks/hooks, so just persist the change and broadcast.
+    if (!sort.fk_view_id) {
+      const res = await Sort.update(context, param.sortId, param.sort, ncMeta);
+      UniversalDatabaseSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: {
+            action: 'sort_update',
+            payload: { ...sort, ...param.sort },
+          },
+        },
+        context.socket_id,
+      );
+      return res;
+    }
+
+    const view = await View.get(context, sort.fk_view_id, false, ncMeta);
+    assertViewConfigEditable(context, view, param.req);
+
+    const viewWebhookManager =
+      param.viewWebhookManager ??
+      (
+        await (
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
+            view.fk_model_id,
+          )
+        ).withViewId(view.id)
+      ).forUpdate();
+
+    const res = await Sort.update(context, param.sortId, param.sort, ncMeta);
+
+    this.appHooksService.emit(AppEvents.SORT_UPDATE, {
+      sort: {
+        ...sort,
+        ...param.sort,
+      },
+      oldSort: sort,
+      column,
+      view,
+      req: param.req,
+      context,
+    });
+
+    UniversalDatabaseSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'sort_update',
+          payload: {
+            ...sort,
+            ...param.sort,
+          },
+        },
+      },
+      context.socket_id,
+    );
+
+    if (!param.viewWebhookManager) {
+      (await viewWebhookManager.withNewViewId(view.id)).emit();
+    }
+    return res;
+  }
+
+  async sortCreate(
+    context: NcContext,
+    param: {
+      viewId: string;
+      sort: SortReqType;
+      req: NcRequest;
+      viewWebhookManager?: ViewWebhookManager;
+    },
+    ncMeta?: MetaService,
+  ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked();
+    }
+    validatePayload('swagger.json#/components/schemas/SortReq', param.sort);
+
+    if (param.sort.fk_column_id) {
+      const col = await Column.get(
+        context,
+        { colId: param.sort.fk_column_id },
+        ncMeta,
+      );
+      if (
+        col?.colOptions?.error &&
+        !(col?.colOptions as { data_error?: boolean }).data_error
+      ) {
+        NcError.get(context).badRequest(
+          `Cannot use column '${col.title}' in sort: ${col.colOptions.error}`,
+        );
+      }
+    }
+
+    await this.validateSortOrderBy(
+      context,
+      param.sort,
+      param.sort.fk_column_id,
+      ncMeta,
+    );
+
+    const view = await View.get(context, param.viewId, false, ncMeta);
+
+    if (!view) {
+      NcError.badRequest('View not found');
+    }
+    assertViewConfigEditable(context, view, param.req);
+    const viewWebhookManager =
+      param.viewWebhookManager ??
+      (
+        await (
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
+            view.fk_model_id,
+          )
+        ).withViewId(view.id)
+      ).forUpdate();
+
+    const sort = await Sort.insert(
+      context,
+      {
+        ...param.sort,
+        fk_view_id: param.viewId,
+      } as Sort,
+      ncMeta,
+    );
+
+    const column = await Column.get(
+      context,
+      { colId: sort.fk_column_id },
+      ncMeta,
+    );
+
+    this.appHooksService.emit(AppEvents.SORT_CREATE, {
+      sort,
+      view,
+      column,
+      req: param.req,
+      context,
+    });
+
+    UniversalDatabaseSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'sort_create',
+          payload: sort,
+        },
+      },
+      context.socket_id,
+    );
+    if (!param.viewWebhookManager) {
+      (await viewWebhookManager.withNewViewId(view.id)).emit();
+    }
+
+    return sort;
+  }
+
+  // Option order is SingleSelect-only for now (MultiSelect semantics are open),
+  // and not on lookup sorts: their row-limit subqueries order by the raw column.
+  protected async validateSortOrderBy(
+    context: NcContext,
+    sort: SortReqType,
+    columnId: string | undefined,
+    ncMeta?: MetaService,
+    isLookupSort = false,
+  ) {
+    if (sort?.order_by !== SortOrderBy.OPTION_ORDER) return;
+    if (isLookupSort) {
+      NcError.get(context).badRequest(
+        'option order sort is not supported for lookup sorts',
+      );
+    }
+    const column = columnId
+      ? await Column.get(context, { colId: columnId }, ncMeta)
+      : undefined;
+    if (column?.uidt !== UITypes.SingleSelect) {
+      NcError.get(context).badRequest(
+        'option order sort is only supported for SingleSelect fields',
+      );
+    }
+  }
+
+  async sortList(context: NcContext, param: { viewId: string }) {
+    return Sort.list(context, { viewId: param.viewId });
+  }
+
+  // ── Lookup-scoped sorts (fk_lookup_col_id) — mirror of linkFilterCreate/List ──
+  // Order the relation sub-query of a Lookup column. CRUD by sortId for
+  // update/delete reuses the existing sortUpdate/sortDelete.
+  async lookupSortCreate(
+    context: NcContext,
+    param: { columnId: string; sort: SortReqType; req: NcRequest },
+    ncMeta?: MetaService,
+  ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked();
+    }
+
+    // Per-lookup sort is a paid feature — gate creation behind the license so it
+    // can't be written through the raw op on an unlicensed/CE workspace (the
+    // column-save path gates the same feature via validateLookupSortConfig).
+    await assertLookupSortLimitLicensed(context);
+
+    validatePayload('swagger.json#/components/schemas/SortReq', param.sort);
+
+    await this.validateSortOrderBy(
+      context,
+      param.sort,
+      param.sort.fk_column_id,
+      ncMeta,
+      true,
+    );
+
+    const lookupCol = await Column.get(
+      context,
+      { colId: param.columnId },
+      ncMeta,
+    );
+    if (!lookupCol || lookupCol.uidt !== UITypes.Lookup) {
+      NcError.get(context).badRequest('Lookup column not found');
+    }
+
+    if (param.sort.fk_column_id) {
+      await this.validateLookupSortColumn(
+        context,
+        lookupCol,
+        param.sort.fk_column_id,
+        ncMeta,
+      );
+    }
+
+    return await Sort.insert(
+      context,
+      {
+        ...param.sort,
+        fk_lookup_col_id: param.columnId,
+      },
+      ncMeta,
+    );
+  }
+
+  // The sort column must be a scalar column of the lookup's related table —
+  // otherwise it silently no-ops at query time. The related table may be in
+  // another base, so resolve it through the relation's refContext.
+  protected async validateLookupSortColumn(
+    context: NcContext,
+    lookupCol: Column,
+    fkColumnId: string,
+    ncMeta?: MetaService,
+  ) {
+    const lookupOpts = await lookupCol.getColOptions<LookupColumn>(ncMeta);
+    const relationCol = await lookupOpts?.getRelationColumn();
+    const relation =
+      await relationCol?.getColOptions<LinkToAnotherRecordColumn>(ncMeta);
+    const refContext = relation ? relation.getRelContext().refContext : context;
+
+    const sortCol = await Column.get(refContext, { colId: fkColumnId }, ncMeta);
+
+    // Only real scalar columns are sortable: the correlated sub-query the
+    // filter/formula/view-sort consumers build orders by the physical
+    // `column_name`, which a virtual column (Formula/Lookup/Rollup/LTAR/…)
+    // doesn't have — allowing one would emit an invalid ORDER BY and 500 on
+    // every filtered read. Mirrors the UI's disabled-column rule (LookupSort.vue).
+    if (sortCol && isVirtualCol(sortCol)) {
+      NcError.get(context).badRequest(
+        'Lookup sort column must be a sortable (scalar) field',
+      );
+    }
+
+    if (
+      relation?.fk_related_model_id &&
+      sortCol?.fk_model_id !== relation.fk_related_model_id
+    ) {
+      NcError.get(context).badRequest(
+        'Lookup sort column must belong to the related table',
+      );
+    }
+  }
+
+  async lookupSortList(
+    context: NcContext,
+    param: { columnId: string },
+    ncMeta?: MetaService,
+  ) {
+    return await Sort.listByLookupColumn(
+      context,
+      { columnId: param.columnId },
+      ncMeta,
+    );
+  }
+}

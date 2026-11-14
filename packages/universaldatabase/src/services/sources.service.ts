@@ -1,0 +1,346 @@
+import { Injectable } from '@nestjs/common';
+import {
+  AppEvents,
+  EventType,
+  IntegrationsType,
+  validateAndExtractSSLProp,
+} from 'universaldatabase-sdk';
+import type { BaseReqType, IntegrationType } from 'universaldatabase-sdk';
+import type { NcContext, NcRequest } from '~/interface/config';
+import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import { populateMeta, validatePayload } from '~/helpers';
+import { syncBaseMigration } from '~/helpers/syncMigration';
+import { Base, Integration, Source } from '~/models';
+import { NcError } from '~/helpers/catchError';
+import { getIntegrationForSource } from '~/helpers/integrationAccess';
+import { validateAndNormalizeSqliteConfig } from '~/helpers/validateSqliteFilename';
+import { validateChangedDbConnectionTargets } from '~/helpers/validateDbConnectionHost';
+import { parseConfigPayload } from '~/helpers/configPayload';
+import Universal Database from '~/Universal Database';
+import UniversalDatabaseSocket from '~/socket/UniversalDatabaseSocket';
+
+@Injectable()
+export class SourcesService {
+  constructor(protected readonly appHooksService: AppHooksService) {}
+
+  async baseGetWithConfig(context: NcContext, param: { sourceId: any }) {
+    const source = await Source.get(context, param.sourceId);
+
+    if (!source) {
+      NcError.get(context).sourceNotFound(param.sourceId);
+    }
+
+    source.config = await source.getSourceConfig();
+
+    return source;
+  }
+
+  async baseUpdate(
+    context: NcContext,
+    param: {
+      sourceId: string;
+      source: BaseReqType;
+      baseId: string;
+      req: NcRequest;
+    },
+  ) {
+    validatePayload('swagger.json#/components/schemas/BaseReq', param.source);
+
+    const oldSource = await Source.get(context, param.sourceId);
+
+    if (!oldSource) {
+      NcError.get(context).sourceNotFound(param.sourceId);
+    }
+
+    const baseBody = param.source;
+    baseBody.config = parseConfigPayload(context, baseBody.config);
+
+    // Same server-determined flags as in baseCreate — `Source.update` also
+    // extracts them, so without this an existing source could be flipped onto the
+    // metadata connection after the fact.
+    delete (baseBody as any).is_meta;
+    delete (baseBody as any).is_local;
+
+    // Soft delete belongs to the delete endpoints, which guard a base's own
+    // source; `deleted` is in the model's update allow-list for them, and
+    // accepting it here would route around that guard.
+    delete (baseBody as any).deleted;
+
+    validateAndNormalizeSqliteConfig(
+      baseBody?.config,
+      baseBody?.type ?? oldSource?.type,
+    );
+    if (baseBody?.config) {
+      await validateChangedDbConnectionTargets(
+        baseBody.config,
+        oldSource.getSourceConfig(),
+      );
+    }
+
+    if (
+      (baseBody as any).fk_integration_id &&
+      (baseBody as any).fk_integration_id !== oldSource.fk_integration_id
+    ) {
+      this.assertDatabaseIntegration(
+        await getIntegrationForSource(
+          context,
+          (baseBody as any).fk_integration_id,
+          param.req.user?.id,
+          oldSource.base_id,
+        ),
+      );
+    }
+
+    const source = await Source.update(context, param.sourceId, {
+      ...baseBody,
+      type: baseBody.config?.client,
+      id: param.sourceId,
+    });
+
+    source.config = undefined;
+    source.integration_config = undefined;
+
+    const integration = await Integration.get(
+      context,
+      source.fk_integration_id,
+    );
+
+    this.appHooksService.emit(AppEvents.SOURCE_UPDATE, {
+      source,
+      oldSource,
+      req: param.req,
+      integration,
+      context,
+    });
+
+    UniversalDatabaseSocket.broadcastEvent(
+      context,
+      {
+        event: EventType.META_EVENT,
+        payload: {
+          action: 'source_update',
+          payload: source,
+        },
+      },
+      context.socket_id,
+    );
+
+    return source;
+  }
+
+  protected assertDatabaseIntegration(integration: IntegrationType) {
+    if (
+      integration.type !== IntegrationsType.Database ||
+      !integration.sub_type
+    ) {
+      NcError.badRequest('Integration type should be Database');
+    }
+  }
+
+  async baseList(context: NcContext, param: { baseId: string }) {
+    const sources = await Source.list(context, { baseId: param.baseId });
+
+    return sources;
+  }
+
+  async baseDelete(
+    context: NcContext,
+    param: { sourceId: string; req: any },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const source = await Source.get(context, param.sourceId, true, ncMeta);
+    if (!source) NcError.get(context).sourceNotFound(param.sourceId);
+
+    try {
+      const integration = await Integration.get(
+        context,
+        source.fk_integration_id,
+      );
+      await source.delete(ncMeta);
+      this.appHooksService.emit(AppEvents.SOURCE_DELETE, {
+        source: {
+          ...source,
+          config: undefined,
+        },
+        req: param.req,
+        integration: {
+          ...integration,
+          config: undefined,
+        },
+        context,
+      });
+    } catch (e) {
+      NcError.get(context).badRequest(e);
+    }
+    return true;
+  }
+
+  async baseSoftDelete(
+    context: NcContext,
+    param: { sourceId: string },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const source = await Source.get(context, param.sourceId, false, ncMeta);
+    if (!source) NcError.get(context).sourceNotFound(param.sourceId);
+
+    try {
+      await source.softDelete(ncMeta);
+
+      source.config = undefined;
+      source.integration_config = undefined;
+
+      UniversalDatabaseSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: {
+            action: 'source_delete',
+            payload: source,
+          },
+        },
+        context.socket_id,
+      );
+    } catch (e) {
+      NcError.get(context).badRequest(e);
+    }
+    return true;
+  }
+
+  async baseCreate(
+    context: NcContext,
+    param: {
+      baseId: string;
+      source: BaseReqType;
+      logger?: (message: string) => void;
+      req: any;
+    },
+  ): Promise<{
+    source: Source;
+    error?: any;
+  }> {
+    validatePayload('swagger.json#/components/schemas/BaseReq', param.source);
+    param.source.config = parseConfigPayload(context, param.source.config);
+
+    // Unlike baseUpdate, this path never validated the filename — a source could
+    // point at Universal Database's own metadata database (universaldatabase.db / nc_data.db).
+    validateAndNormalizeSqliteConfig(
+      param.source.config,
+      (param.source.config as any)?.client ?? param.source.type,
+    );
+
+    // type | base | baseId
+    const baseBody = param.source;
+    baseBody.alias = baseBody.alias?.trim();
+
+    // `is_meta`/`is_local` make Source resolve the connection from Universal Database's own
+    // internal config instead of `config` (Source.ts:336), so accepting them from
+    // the request body handed a Base Creator a source pointed at the metadata
+    // database. Both are server-determined: the only legitimate `is_meta` source
+    // is the one Base.insert builds at base creation.
+    delete (baseBody as any).is_meta;
+    delete (baseBody as any).is_local;
+    const base = await Base.getWithInfo(context, param.baseId);
+
+    let error;
+
+    param.logger?.('Creating the source');
+    let integration: IntegrationType;
+
+    // if missing integration id, create a new private integration
+    // and map the id to the source
+    if (!(baseBody as any).fk_integration_id) {
+      // This branch creates the Integration model directly, bypassing
+      // integrationCreate and its guards — mirror the enterprise SQLite block.
+      if (baseBody.config?.client === 'sqlite3' && UniversalDatabase.isEE()) {
+        NcError.get(context).badRequest(
+          'SQLite connections are only available on the free self-hosted edition',
+        );
+      }
+      integration = await Integration.createIntegration({
+        title: baseBody.alias,
+        type: IntegrationsType.Database,
+        sub_type: baseBody.config?.client,
+        is_private: !!param.req.user?.id,
+        config: baseBody.config,
+        workspaceId: context.workspace_id,
+        created_by: param.req.user?.id,
+      });
+
+      (baseBody as any).fk_integration_id = integration.id;
+      baseBody.config = {
+        client: baseBody.config?.client,
+      };
+      baseBody.type = baseBody.config?.client as unknown as BaseReqType['type'];
+    } else {
+      integration = await getIntegrationForSource(
+        context,
+        (baseBody as any).fk_integration_id,
+        param.req.user?.id,
+        base.id,
+      );
+
+      this.assertDatabaseIntegration(integration);
+
+      baseBody.type = integration.sub_type as unknown as BaseReqType['type'];
+    }
+
+    // update invalid ssl config value if found
+    if (baseBody.config?.connection?.ssl) {
+      baseBody.config.connection.ssl = validateAndExtractSSLProp(
+        baseBody.config.connection,
+        baseBody.config.sslUse,
+        baseBody.config.client,
+      );
+    }
+
+    const source = await Source.createBase(context, {
+      ...baseBody,
+      baseId: base.id,
+    });
+
+    try {
+      await syncBaseMigration(base, source);
+
+      param.logger?.('Populating meta');
+
+      const info = await populateMeta(context, {
+        source,
+        base,
+        logger: param.logger,
+        user: param.req.user,
+      });
+
+      this.appHooksService.emit(AppEvents.APIS_CREATED, {
+        info,
+        req: param.req,
+        context,
+      });
+
+      source.config = undefined;
+      source.integration_config = undefined;
+
+      this.appHooksService.emit(AppEvents.SOURCE_CREATE, {
+        source,
+        req: param.req,
+        integration,
+        context,
+      });
+
+      UniversalDatabaseSocket.broadcastEvent(
+        context,
+        {
+          event: EventType.META_EVENT,
+          payload: {
+            action: 'source_create',
+            payload: source,
+          },
+        },
+        context.socket_id,
+      );
+    } catch (e) {
+      error = e;
+    }
+
+    return { source, error };
+  }
+}

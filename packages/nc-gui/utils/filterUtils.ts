@@ -1,0 +1,452 @@
+import {
+  ClientType,
+  SqlUiFactory,
+  UITypes,
+  ViewTypes,
+  comparisonOpList,
+  comparisonSubOpList,
+  deleteFilterWithSub,
+  getEquivalentUIType,
+  getFilterCount,
+  getPlaceholderNewRow,
+  getRollupResultUidt,
+  isBtLikeV2Junction,
+  isComparisonOpAllowed,
+  isDateType,
+  isLinksOrLTAR,
+  isSystemColumn,
+  isVirtualCol,
+  parseProp,
+} from 'universaldatabase-sdk'
+import type {
+  ColumnType,
+  ColumnTypeForFilter,
+  ComparisonOpUiType,
+  FilterGroupChangeEvent,
+  FilterRowChangeEvent,
+  FilterType,
+  LinkToAnotherRecordType,
+  LookupType,
+  TableType,
+} from 'universaldatabase-sdk'
+import type { GetMetaParams } from '~/composables/useMetas'
+
+export const MAX_NESTED_LEVEL = 5
+export const excludedFilterColUidt = [UITypes.QrCode, UITypes.Barcode, UITypes.Button]
+
+// Re-export types from universaldatabase-sdk for backward compatibility
+export type { ComparisonOpUiType, FilterGroupChangeEvent, FilterRowChangeEvent, ColumnTypeForFilter }
+
+// Re-export functions from universaldatabase-sdk for backward compatibility
+export {
+  isDateType,
+  comparisonOpList,
+  comparisonSubOpList,
+  getPlaceholderNewRow,
+  isComparisonOpAllowed,
+  getFilterCount,
+  deleteFilterWithSub,
+}
+
+// Text-like fields default to the "is like" (substring match) operator since
+// partial matching is the most common intent when filtering free text. All other
+// field types fall back to the first allowed operator in the list.
+const TEXT_LIKE_FILTER_DEFAULT_TYPES = new Set<UITypes>([
+  UITypes.SingleLineText,
+  UITypes.LongText,
+  UITypes.Email,
+  UITypes.URL,
+  UITypes.PhoneNumber,
+])
+
+/**
+ * Pick the default comparison operator for a freshly created/retargeted filter.
+ * Filters `ops` through `isAllowed`, then prefers `like` for text-like fields and
+ * otherwise returns the first allowed operator (the historical behaviour).
+ */
+export const getDefaultComparisonOp = (
+  ops: ComparisonOpUiType[],
+  isAllowed: (compOp: ComparisonOpUiType) => boolean,
+  uidt?: UITypes,
+): string | undefined => {
+  const allowed = ops.filter(isAllowed)
+  if (uidt && TEXT_LIKE_FILTER_DEFAULT_TYPES.has(uidt)) {
+    const like = allowed.find((op) => op.value === 'like')
+    if (like) return like.value
+  }
+  return allowed[0]?.value
+}
+
+/**
+ * Strip FE-only transient fields (`tmp_id`, `status`, `dynamic`) and DB
+ * system fields (`source_id`, `base_id`, `fk_workspace_id`, `created_at`,
+ * `updated_at`) from a filter body before sending it to the BE.
+ */
+export const stripFilterApiBody = <T extends Record<string, any>>(filter: T): T => {
+  const {
+    tmp_id: _tmp,
+    status: _status,
+    dynamic: _dynamic,
+    source_id: _sourceId,
+    base_id: _baseId,
+    fk_workspace_id: _fkWs,
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    children,
+    is_group,
+    ...rest
+  } = filter
+  return {
+    ...rest,
+    ...(is_group != null ? { is_group } : {}),
+    ...(Array.isArray(children) ? { children: children.map((c) => stripFilterApiBody(c)) } : {}),
+  } as T
+}
+
+export const isComparisonSubOpAllowed = (
+  filter: ColumnFilterType,
+  compOp: {
+    text: string
+    value: string
+    ignoreVal?: boolean
+    includedTypes?: UITypes[]
+    excludedTypes?: UITypes[]
+  },
+  uidt?: UITypes,
+) => {
+  if (compOp.includedTypes) {
+    // include allowed values only if selected column type matches
+    return filter.fk_column_id && compOp.includedTypes.includes(uidt!)
+  } else if (compOp.excludedTypes) {
+    // include not allowed values only if selected column type not matches
+    return filter.fk_column_id && !compOp.excludedTypes.includes(uidt!)
+  }
+}
+
+// filter is draft if it's not saved to db yet
+export const isFilterDraft = (filter: Filter, col: ColumnTypeForFilter) => {
+  if (filter.id) return false
+
+  if (
+    filter.comparison_op &&
+    comparisonSubOpList(filter.comparison_op, parseProp(col?.meta)?.date_format).find(
+      (compOp) => compOp.value === filter.comparison_sub_op,
+    )?.ignoreVal
+  ) {
+    return false
+  }
+
+  if (
+    comparisonOpList((col.filterUidt ?? col.uidt) as UITypes, parseProp(col?.meta)?.date_format).find(
+      (compOp) => compOp.value === filter.comparison_op,
+    )?.ignoreVal
+  ) {
+    return false
+  }
+
+  if (filter.value) {
+    return false
+  }
+
+  return true
+}
+
+export const isDynamicFilterAllowed = (filter: ColumnFilterType, column?: ColumnType, dbClientType?: ClientType) => {
+  if (!column) {
+    return false
+  }
+  // if virtual column, don't allow dynamic filter
+  if (isVirtualCol(column)) return false
+  const sqlUi = SqlUiFactory.create({ client: dbClientType ?? ClientType.PG })
+
+  // disable dynamic filter for certain fields like rating, attachment, etc
+  if (
+    [
+      UITypes.Attachment,
+      UITypes.Rating,
+      UITypes.Checkbox,
+      UITypes.QrCode,
+      UITypes.Barcode,
+      UITypes.Collaborator,
+      UITypes.GeoData,
+      UITypes.SpecificDBType,
+    ].includes(column.uidt as UITypes)
+  )
+    return false
+
+  const abstractType = sqlUi.getAbstractType(column)
+
+  if (!['integer', 'float', 'text', 'string'].includes(abstractType)) return false
+
+  return !filter.comparison_op || ['eq', 'lt', 'gt', 'lte', 'gte', 'like', 'nlike', 'neq'].includes(filter.comparison_op)
+}
+
+// Table whose records a Link column (or the Link leaf of a Lookup) points at
+export const getLinkedRecordTargetId = (column?: ColumnType) => {
+  if (!column || !isLinksOrLTAR(column)) return undefined
+  return (column.colOptions as LinkToAnotherRecordType)?.fk_related_model_id
+}
+
+export const getDynamicColumns = (metaColumns: ColumnType[], column?: ColumnType, dbClientType?: ClientType) => {
+  if (!column) return []
+  const sqlUi = SqlUiFactory.create({ client: dbClientType ?? ClientType.PG })
+
+  return metaColumns.filter((c: ColumnType) => {
+    if (excludedFilterColUidt.includes(c.uidt as UITypes) || isVirtualCol(c) || (isSystemColumn(c) && !c.pk)) {
+      return false
+    }
+
+    const dynamicColAbstractType = sqlUi.getAbstractType(c)
+
+    const filterColAbstractType = sqlUi.getAbstractType(column)
+
+    // treat float and integer as number
+    if ([dynamicColAbstractType, filterColAbstractType].every((type) => ['float', 'integer'].includes(type))) {
+      return true
+    }
+
+    // treat text and string as string
+    if ([dynamicColAbstractType, filterColAbstractType].every((type) => ['text', 'string'].includes(type))) {
+      return true
+    }
+
+    return filterColAbstractType === dynamicColAbstractType
+  })
+}
+
+/** The type a field filters as: a formula or rollup by its result, else its own uidt. */
+export const getResultUidt = (col: ColumnType): UITypes => {
+  if (col.uidt === UITypes.Formula) {
+    return (getEquivalentUIType({ formulaColumn: col }) || col.uidt) as UITypes
+  }
+  if (col.uidt === UITypes.Rollup) {
+    return getRollupResultUidt(col) ?? (col.uidt as UITypes)
+  }
+  return col.uidt as UITypes
+}
+
+/** Filter type per column id; a lookup filters as the field at the end of its chain (`lookupTargets`). */
+export const getFilterTypesMap = (
+  columns: ColumnType[],
+  lookupTargets: Record<string, ColumnType | undefined>,
+): Record<string, UITypes> => {
+  const types: Record<string, UITypes> = {}
+  for (const col of columns) {
+    types[col.id!] = getResultUidt(lookupTargets[col.id!] ?? col)
+  }
+  return types
+}
+
+export const getFilterUidt = (col: ColumnTypeForFilter): UITypes => {
+  // V2 MO/OO Links → filter by display value like LTAR
+  if (col.uidt === UITypes.Links && isBtLikeV2Junction(col)) {
+    return UITypes.LinkToAnotherRecord
+  }
+  // a lookup filters as the field at the end of its chain
+  if (col.btLookupColumn) {
+    return getResultUidt(col.btLookupColumn)
+  }
+  return getResultUidt(col)
+}
+
+/**
+ * A filter saved before its field filtered as a date (e.g. a min/max rollup) has no sub-op;
+ * give it the one picking the operator would have set.
+ */
+export const defaultDateFilterSubOp = (filter: Pick<FilterType, 'comparison_op' | 'comparison_sub_op'>, uidt?: UITypes) => {
+  if (
+    filter.comparison_sub_op ||
+    !filter.comparison_op ||
+    !uidt ||
+    !isDateType(uidt) ||
+    ['blank', 'notblank', 'empty', 'notempty', 'null', 'notnull'].includes(filter.comparison_op)
+  ) {
+    return
+  }
+  filter.comparison_sub_op = filter.comparison_op === 'isWithin' ? 'pastNumberOfDays' : 'exactDate'
+}
+
+export const composeColumnsForFilter = async ({
+  rootMeta,
+  getMeta,
+}: {
+  rootMeta: TableType
+  getMeta: (params: GetMetaParams) => Promise<TableType | null>
+}) => {
+  const result: ColumnTypeForFilter[] = []
+  for (const column of rootMeta.columns!) {
+    if (column.uidt !== UITypes.Lookup) {
+      result.push({ ...column, filterUidt: getFilterUidt(column) })
+      continue
+    }
+
+    let nextCol: ColumnType | undefined = column
+    // base of the table nextCol lives in; changes when a hop crosses bases
+    let currentBaseId = rootMeta.base_id!
+    // check all the relation of nested lookup columns is bt or not
+    // include the column only if all only if all relations are bt
+    while (nextCol && nextCol.uidt === UITypes.Lookup) {
+      // extract the relation column meta
+      const lookupRelation: ColumnType | undefined = (
+        await getMeta({ baseId: currentBaseId, tableIdOrTitle: nextCol.fk_model_id! })
+      )?.columns?.find((c) => c.id === (nextCol!.colOptions as LookupType).fk_relation_column_id)
+      // this is less likely to happen but if relation column is not found then break the loop
+      if (!lookupRelation) {
+        break
+      }
+
+      const relationColOptions = lookupRelation.colOptions as LinkToAnotherRecordType
+      currentBaseId = relationColOptions.fk_related_base_id || currentBaseId
+      const relatedTableMeta: TableType | null = await getMeta({
+        baseId: currentBaseId,
+        tableIdOrTitle: relationColOptions.fk_related_model_id!,
+      })
+      nextCol = relatedTableMeta?.columns?.find((c) => c.id === (nextCol!.colOptions as LookupType).fk_lookup_column_id)
+
+      // if next column is same as root lookup column then break the loop
+      // since it's going to be a circular loop
+      if (nextCol?.id === column.id) {
+        break
+      }
+    }
+    const columnTypeForFilter: ColumnTypeForFilter = {
+      ...column,
+      btLookupColumn: nextCol,
+    }
+    columnTypeForFilter.filterUidt = getFilterUidt(columnTypeForFilter)
+    result.push(columnTypeForFilter)
+  }
+  return result
+}
+
+export const adjustFilterWhenColumnChange = ({
+  filter,
+  column,
+  showNullAndEmptyInFilter,
+}: {
+  filter: ColumnFilterType
+  column: ColumnTypeForFilter
+  showNullAndEmptyInFilter?: boolean
+}) => {
+  if (!column) return
+
+  const evalUidt: UITypes = column.filterUidt ?? column.uidt
+  if (isVirtualCol(column)) {
+    filter.dynamic = false
+    filter.fk_value_col_id = null
+  } else {
+    filter.fk_value_col_id = null
+  }
+  filter.comparison_op = getDefaultComparisonOp(
+    comparisonOpList(evalUidt, parseProp(column.meta)?.date_format),
+    (compOp) => isComparisonOpAllowed(filter, compOp, evalUidt as UITypes, showNullAndEmptyInFilter),
+    evalUidt,
+  )
+
+  if (isDateType(evalUidt) && !['blank', 'notblank'].includes(filter.comparison_op!)) {
+    if (filter.comparison_op === 'isWithin') {
+      filter.comparison_sub_op = 'pastNumberOfDays'
+    } else {
+      filter.comparison_sub_op = 'exactDate'
+    }
+
+    // Initialize filter.meta if it doesn't exist
+    if (!filter.meta) {
+      filter.meta = {}
+    }
+    if (!filter.meta.timezone) {
+      filter.meta.timezone = getTimezoneFromColumn(column)
+    }
+  } else {
+    // reset
+    filter.comparison_sub_op = null
+  }
+}
+
+/**
+ * Zone the backend evaluates a date filter in: the filter's, then the field's
+ * (a lookup's comes from the looked-up field), then the request's `whereTz`
+ * (only calendar views send one), else UTC.
+ */
+export function getEffectiveFilterTimezone(
+  filter: { meta?: any } | undefined,
+  column: ColumnTypeForFilter | undefined,
+  requestTimezone?: string,
+) {
+  return (
+    parseProp(filter?.meta).timezone ||
+    parseProp((column?.btLookupColumn ?? column)?.meta).timezone ||
+    requestTimezone ||
+    'Etc/UTC'
+  )
+}
+
+/** The `whereTz` a view's data requests carry: calendar sends the browser zone, others none. */
+export function getFilterRequestTimezone(view?: { type?: ViewTypes }) {
+  return view?.type === ViewTypes.CALENDAR ? Intl.DateTimeFormat().resolvedOptions().timeZone : undefined
+}
+
+export function getTimezoneFromColumn(col: ColumnTypeForFilter, defaultValue = Intl.DateTimeFormat().resolvedOptions().timeZone) {
+  // a lookup takes the looked-up field's timezone
+  const columnMeta = parseProp((col.btLookupColumn ?? col).meta)
+  return columnMeta.timezone || defaultValue
+}
+
+// Fields the backend actually persists on a filter row. UI-only fields like
+// `tmp_id`, `children`, and `id` are deliberately excluded so callers can
+// diff/snapshot the persistable subset without reacting to UI noise.
+export const FILTER_PERSISTABLE_FIELDS = [
+  'fk_column_id',
+  'comparison_op',
+  'comparison_sub_op',
+  'value',
+  'fk_parent_id',
+  'is_group',
+  'logical_op',
+  'fk_value_col_id',
+  'meta',
+  'order',
+  'enabled',
+] as const
+
+// Returns true if any persistable field differs between two filter rows.
+// Used to skip redundant `filterUpdate` API calls when nothing the backend
+// would store has changed.
+export function filtersDiffer(a: Record<string, any> | null | undefined, b: Record<string, any> | null | undefined): boolean {
+  if (!a || !b) return true
+  for (const k of FILTER_PERSISTABLE_FIELDS) {
+    if (a[k] !== b[k]) return true
+  }
+  return false
+}
+
+// Extract the persistable subset of a filter for diff/snapshot comparisons.
+export function snapshotFilter(f: Record<string, any>): Record<string, any> {
+  const snap: Record<string, any> = {}
+  for (const k of FILTER_PERSISTABLE_FIELDS) snap[k] = f[k]
+  return snap
+}
+
+/**
+ * True for a filter group with no condition anywhere below it. `childrenOf` returns a group's non-deleted
+ * children, or undefined when they aren't loaded; an unloaded group is never treated as empty.
+ */
+export function isEmptyFilterGroup(filter: FilterType, childrenOf: (groupId: string) => FilterType[] | undefined): boolean {
+  if (!filter?.is_group || !filter.id) return false
+
+  const children = childrenOf(filter.id)
+
+  if (!children) return false
+
+  return !children.some((child) => !isEmptyFilterGroup(child, childrenOf))
+}
+
+/** Filters shown on the toolbar badge: empty groups don't count. */
+export function countActiveFilters(
+  filters: FilterType[],
+  childrenOf: (groupId: string) => FilterType[] | undefined,
+  { enabledOnly = false }: { enabledOnly?: boolean } = {},
+): number {
+  return filters.filter((f) => !isEmptyFilterGroup(f, childrenOf) && (!enabledOnly || (f.enabled !== false && f.enabled !== 0)))
+    .length
+}

@@ -1,0 +1,13 @@
+{
+  "client": "pg",
+  "connection": {
+    "host": "your-managed-db-host.rds.amazonaws.com",
+    "port": "5432",
+    "user": "universaldatabase",
+    "password": "CHANGE_ME_db_password",
+    "database": "universaldatabase",
+    "ssl": {
+      "rejectUnauthorized": true
+    }
+  }
+}

@@ -1,0 +1,22 @@
+# Values used by chart-testing (ct install) in CI. The CI job provisions throwaway
+# in-cluster Postgres and Redis and injects connection strings via a pre-created Secret.
+replicaCount: 1
+worker:
+  enabled: true
+  replicaCount: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+externalDatabase:
+  existingSecret: universaldatabase-ci
+externalRedis:
+  existingSecret: universaldatabase-ci
+auth:
+  existingSecret: universaldatabase-ci
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+startupProbe:
+  failureThreshold: 60

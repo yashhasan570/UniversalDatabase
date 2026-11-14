@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "universaldatabase.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "universaldatabase.labels" . | nindent 4 }}
+  {{- with include "universaldatabase.annotations" (dict "context" . "extraAnnotations" .Values.service.annotations) }}
+  annotations:
+    {{- . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "universaldatabase.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: app

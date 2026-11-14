@@ -1,0 +1,258 @@
+import { resolveRollupResultUidt } from 'universaldatabase-sdk';
+import type { ParsedFormulaNode, RollupType, UITypes } from 'universaldatabase-sdk';
+import type { NcContext } from '~/interface/config';
+import type LinkToAnotherRecordColumn from '~/models/LinkToAnotherRecordColumn';
+import Column from '~/models/Column';
+import Universal Database from '~/Universal Database';
+import UniversalDatabaseCache from '~/cache/UniversalDatabaseCache';
+import { extractProps } from '~/helpers/extractProps';
+import { CacheGetType, CacheScope, MetaTable } from '~/utils/globals';
+import { parseMetaProp, stringifyMetaProp } from '~/utils/modelUtils';
+import { NcError } from '~/helpers/catchError';
+import {
+  getModelContext,
+  setModelContext,
+  throwMissingContext,
+} from '~/helpers/modelContext';
+
+export const ROLLUP_FUNCTIONS = <const>[
+  'count',
+  'countAll',
+  'min',
+  'max',
+  'avg',
+  'countDistinct',
+  'sumDistinct',
+  'avgDistinct',
+  'sum',
+  'formula',
+];
+
+/**
+ * `min`/`max` over a date field returns that date type. Resolved from the
+ * target field on every read, so it follows a change to that field's type.
+ */
+async function resolveResultUidt(
+  rollup: RollupColumn,
+  ncMeta = UniversalDatabase.ncMeta,
+): Promise<RollupColumn['result_uidt']> {
+  if (rollup.rollup_function !== 'min' && rollup.rollup_function !== 'max') {
+    return undefined;
+  }
+  try {
+    const rollupColumn = await rollup.getRollupColumn(ncMeta);
+    return rollupColumn
+      ? resolveRollupResultUidt(rollup.rollup_function, rollupColumn.uidt)
+      : undefined;
+  } catch {
+    // a broken link leaves the rollup numeric
+    return undefined;
+  }
+}
+
+// Prefixes an `error` the read fallback stored from the data, which a later
+// read may clear; read() strips it into `data_error`.
+export const ROLLUP_DATA_ERROR_MARK = '[data] ';
+
+export default class RollupColumn implements RollupType {
+  id: string;
+  base_id?: string;
+  fk_workspace_id?: string;
+  fk_column_id;
+  fk_relation_column_id;
+  fk_rollup_column_id;
+  rollup_function: (typeof ROLLUP_FUNCTIONS)[number];
+  rollup_formula?: string;
+  parsed_tree?: ParsedFormulaNode;
+  error: string;
+  // Resolved on read, never stored
+  result_uidt?: UITypes.Date | UITypes.DateTime;
+  // Resolved on read, never stored: `error` came from the data, not validation
+  data_error?: boolean;
+
+  constructor(data: Partial<RollupColumn>) {
+    Object.assign(this, data);
+  }
+
+  get context(): NcContext {
+    const ctx = getModelContext(this);
+    if (ctx) return ctx;
+    if (this.fk_workspace_id && this.base_id) {
+      return {
+        workspace_id: this.fk_workspace_id,
+        base_id: this.base_id,
+      } as NcContext;
+    }
+    throwMissingContext('RollupColumn');
+  }
+
+  public static async insert(
+    context: NcContext,
+    data: Partial<RollupColumn>,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const insertObj = extractProps(data, [
+      'fk_column_id',
+      'fk_relation_column_id',
+      'fk_rollup_column_id',
+      'rollup_function',
+      'rollup_formula',
+      'parsed_tree',
+      'error',
+    ]);
+
+    const column = await Column.get(
+      context,
+      {
+        colId: insertObj.fk_column_id,
+      },
+      ncMeta,
+    );
+
+    if (!column) {
+      NcError.fieldNotFound(insertObj.fk_column_id);
+    }
+
+    await ncMeta.metaInsert2(
+      context.workspace_id,
+      context.base_id,
+      MetaTable.COL_ROLLUP,
+      {
+        ...insertObj,
+        parsed_tree: stringifyMetaProp(insertObj, 'parsed_tree', null),
+      },
+    );
+
+    return this.read(context, data.fk_column_id, ncMeta).then(
+      async (rollupColumn) => {
+        await UniversalDatabaseCache.appendToList(
+          context,
+          CacheScope.COL_ROLLUP,
+          [data.fk_rollup_column_id],
+          `${CacheScope.COL_ROLLUP}:${data.fk_column_id}`,
+        );
+
+        await UniversalDatabaseCache.appendToList(
+          context,
+          CacheScope.COL_ROLLUP,
+          [data.fk_relation_column_id],
+          `${CacheScope.COL_ROLLUP}:${data.fk_column_id}`,
+        );
+
+        return rollupColumn;
+      },
+    );
+  }
+
+  public static async read(
+    context: NcContext,
+    columnId: string,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    let column =
+      columnId &&
+      (await UniversalDatabaseCache.get(
+        context,
+        `${CacheScope.COL_ROLLUP}:${columnId}`,
+        CacheGetType.TYPE_OBJECT,
+      ));
+    if (!column) {
+      column = await ncMeta.metaGet2(
+        context.workspace_id,
+        context.base_id,
+        MetaTable.COL_ROLLUP,
+        { fk_column_id: columnId },
+      );
+      if (column) {
+        column.parsed_tree = parseMetaProp(column, 'parsed_tree', null);
+      }
+      await UniversalDatabaseCache.set(
+        context,
+        `${CacheScope.COL_ROLLUP}:${columnId}`,
+        column,
+      );
+    }
+    if (!column) return null;
+    // a cached copy may hold it serialized
+    column.parsed_tree = parseMetaProp(column, 'parsed_tree', null);
+    const instance = new RollupColumn(column);
+    if (instance.error?.startsWith(ROLLUP_DATA_ERROR_MARK)) {
+      instance.error = instance.error.slice(ROLLUP_DATA_ERROR_MARK.length);
+      instance.data_error = true;
+    }
+    setModelContext(instance, context);
+    const resultUidt = await resolveResultUidt(instance, ncMeta);
+    if (resultUidt) instance.result_uidt = resultUidt;
+    return instance;
+  }
+
+  public async getRollupColumn(ncMeta = UniversalDatabase.ncMeta): Promise<Column> {
+    // The rollup column lives in the related table, which may be in a different base.
+    // Derive refContext from the relation column's LTAR options.
+    const relationCol = await this.getRelationColumn(ncMeta);
+    const colOpts = await relationCol?.getColOptions<LinkToAnotherRecordColumn>(
+      ncMeta,
+    );
+    const refContext = colOpts
+      ? colOpts.getRelContext().refContext
+      : this.context;
+    return Column.get(refContext, { colId: this.fk_rollup_column_id }, ncMeta);
+  }
+
+  public async getRelationColumn(ncMeta = UniversalDatabase.ncMeta): Promise<Column> {
+    return Column.get(
+      this.context,
+      { colId: this.fk_relation_column_id },
+      ncMeta,
+    );
+  }
+
+  public static async update(
+    context: NcContext,
+    columnId: string,
+    data: Partial<RollupColumn>,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const updateObj = extractProps(data, [
+      'fk_column_id',
+      'fk_relation_column_id',
+      'fk_rollup_column_id',
+      'rollup_function',
+      'rollup_formula',
+      'parsed_tree',
+      'error',
+    ]);
+
+    const storedTree =
+      'parsed_tree' in updateObj
+        ? stringifyMetaProp(updateObj, 'parsed_tree', null)
+        : undefined;
+    await ncMeta.metaUpdate(
+      context.workspace_id,
+      context.base_id,
+      MetaTable.COL_ROLLUP,
+      'parsed_tree' in updateObj
+        ? { ...updateObj, parsed_tree: storedTree }
+        : updateObj,
+      {
+        fk_column_id: columnId,
+      },
+    );
+
+    // cache the tree as stored: the validator's tree holds live column objects
+    await UniversalDatabaseCache.update(
+      context,
+      `${CacheScope.COL_ROLLUP}:${columnId}`,
+      'parsed_tree' in updateObj
+        ? {
+            ...updateObj,
+            parsed_tree: parseMetaProp(
+              { parsed_tree: storedTree },
+              'parsed_tree',
+              null,
+            ),
+          }
+        : updateObj,
+    );
+  }
+}

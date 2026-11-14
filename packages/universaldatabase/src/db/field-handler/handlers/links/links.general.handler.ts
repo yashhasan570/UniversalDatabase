@@ -1,0 +1,59 @@
+import { isBtLikeV2Junction } from 'universaldatabase-sdk';
+import { RollupGeneralHandler } from '../rollup/rollup.general.handler';
+import { LtarGeneralHandler } from '../ltar/ltar.general.handler';
+import type CustomKnex from '~/db/CustomKnex';
+import type { Knex } from '~/db/CustomKnex';
+import type {
+  FilterOptions,
+  FilterVerificationResult,
+  SortOptions,
+} from '~/db/field-handler/field-handler.interface';
+import type { Column, Filter } from '~/models';
+import { GenericFieldHandler } from '~/db/field-handler/handlers/generic';
+
+// `Link.Id` (ids of the linked records); stored filter meta is free-form.
+const isIdSubField = (filter: Filter) => {
+  const sub = filter.meta?.ltarSubField;
+  return typeof sub === 'string' && sub.toLowerCase() === 'id';
+};
+
+export class LinksGeneralHandler extends GenericFieldHandler {
+  override async filter(
+    knex: CustomKnex,
+    filter: Filter,
+    column: Column,
+    options: FilterOptions,
+  ) {
+    // V2 MO/OO: single-record semantics — filter by display value (like BT).
+    // `Link.Id`: the linked records' ids, not their count.
+    if (isBtLikeV2Junction(column) || isIdSubField(filter)) {
+      return new LtarGeneralHandler().filter(knex, filter, column, options);
+    }
+
+    // V2 OM/MM and V1: filter by count (rollup)
+    return new RollupGeneralHandler().filter(knex, filter, column, options);
+  }
+
+  override async verifyFilter(
+    filter: Filter,
+    column: Column,
+    options: FilterOptions = {},
+  ): Promise<FilterVerificationResult> {
+    if (isBtLikeV2Junction(column) || isIdSubField(filter)) {
+      return new LtarGeneralHandler().verifyFilter(filter, column, options);
+    }
+    return super.verifyFilter(filter, column);
+  }
+
+  override async applySort(
+    qb: Knex.QueryBuilder,
+    column: Column,
+    direction: 'asc' | 'desc',
+    options: SortOptions,
+  ): Promise<void> {
+    if (isBtLikeV2Junction(column)) {
+      return new LtarGeneralHandler().applySort(qb, column, direction, options);
+    }
+    return new RollupGeneralHandler().applySort(qb, column, direction, options);
+  }
+}

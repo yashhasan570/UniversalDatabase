@@ -1,0 +1,40 @@
+import { getNumericValue, type NcContext, parseProp } from 'universaldatabase-sdk';
+import { DecimalGeneralHandler } from '../decimal/decimal.general.handler';
+import type { IBaseModelSqlV2 } from 'src/db/IBaseModelSqlV2';
+import type { MetaService } from 'src/meta/meta.service';
+import type { Column } from 'src/models';
+import { NcError } from '~/helpers/ncError';
+
+const RADIX_LITERAL = /(^|[^\d.,])0[xob][\da-f]/i;
+
+export class CurrencyGeneralHandler extends DecimalGeneralHandler {
+  override async parseUserInput(params: {
+    value: any;
+    row: any;
+    column: Column;
+    options?: {
+      baseModel?: IBaseModelSqlV2;
+      context?: NcContext;
+      metaService?: MetaService;
+    };
+  }): Promise<{ value: any }> {
+    if (typeof params.value === 'string') {
+      const locale = parseProp(params.column.meta).currency_locale;
+
+      const numericValueResult = getNumericValue(params.value, locale);
+      if (
+        !numericValueResult.isValid ||
+        // getNumericValue strips letters, so "0x1A" would read as 1.
+        RADIX_LITERAL.test(params.value)
+      ) {
+        NcError._.invalidValueForField({
+          value: params.value,
+          column: params.column.title,
+          type: params.column.uidt,
+        });
+      }
+      return { value: numericValueResult.numericValue };
+    }
+    return super.parseUserInput(params);
+  }
+}

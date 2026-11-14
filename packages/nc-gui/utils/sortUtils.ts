@@ -1,0 +1,318 @@
+import {
+  type ColumnType,
+  type SelectOptionsType,
+  SortOrderBy,
+  type SortType,
+  UITypes,
+  getEquivalentUIType,
+  getRollupResultUidt,
+} from 'universaldatabase-sdk'
+import dayjs from 'dayjs'
+
+export const getSortDirectionOptions = (uidt: UITypes | string, isGroupBy?: boolean) => {
+  const groupByOptions = isGroupBy
+    ? [
+        { text: 'Count (9 → 1)', value: 'count-desc' },
+        { text: 'Count (1 → 9)', value: 'count-asc' },
+      ]
+    : []
+
+  switch (uidt) {
+    case UITypes.Year:
+    case UITypes.Number:
+    case UITypes.Decimal:
+    case UITypes.Rating:
+    case UITypes.Count:
+    case UITypes.AutoNumber:
+    case UITypes.Time:
+    case UITypes.Currency:
+    case UITypes.Percent:
+    case UITypes.Duration:
+    case UITypes.PhoneNumber:
+    case UITypes.Date:
+    case UITypes.DateTime:
+    case UITypes.CreatedTime:
+    case UITypes.LastModifiedTime:
+      return [
+        { text: '1 → 9', value: 'asc' },
+        { text: '9 → 1', value: 'desc' },
+      ].concat(groupByOptions)
+    case UITypes.Checkbox:
+      return [
+        { text: '▢ → ✓', value: 'asc' },
+        { text: '✓ → ▢', value: 'desc' },
+      ].concat(groupByOptions)
+    default:
+      return [
+        { text: 'A → Z', value: 'asc' },
+        { text: 'Z → A', value: 'desc' },
+      ].concat(groupByOptions)
+  }
+}
+
+const selectOptionRanks = new WeakMap<object, Map<string, number>>()
+
+// Option title → position, in the server's order (by `order`, first title wins).
+const getSelectOptionRanks = (column: ColumnType) => {
+  const options = (column.colOptions as SelectOptionsType | undefined)?.options ?? []
+  let ranks = selectOptionRanks.get(options)
+  if (!ranks) {
+    ranks = new Map()
+    for (const option of [...options].sort((x, y) => (x.order ?? 0) - (y.order ?? 0))) {
+      if (option.title != null && !ranks.has(option.title)) ranks.set(option.title, ranks.size)
+    }
+    selectOptionRanks.set(options, ranks)
+  }
+  return ranks
+}
+
+export const isOptionOrderSort = (sort: Pick<SortType, 'order_by'> | undefined, column?: ColumnType) =>
+  sort?.order_by === SortOrderBy.OPTION_ORDER && column?.uidt === UITypes.SingleSelect
+
+export const sortByUIType = ({
+  uidt,
+  a,
+  b,
+  options: { caseSensitive = true, direction, orderBy, column },
+}: {
+  uidt: UITypes
+  a: any
+  b: any
+  options: {
+    caseSensitive?: boolean
+    direction?: 'asc' | 'desc' | 'count-asc' | 'count-desc'
+    // With `option_order` and the SingleSelect column, ranks values by option position like the server.
+    orderBy?: SortType['order_by']
+    column?: ColumnType
+  }
+}) => {
+  // a rollup sorts as its result type (text, date, …), as the backend does
+  if (uidt === UITypes.Rollup && column) {
+    uidt = (getRollupResultUidt(column) as UITypes | undefined) ?? uidt
+  }
+
+  let nullsLast = direction !== 'asc'
+
+  if (column && isOptionOrderSort({ order_by: orderBy }, column)) {
+    if (a === null || a === undefined) return b === null || b === undefined ? 0 : nullsLast ? 1 : -1
+    if (b === null || b === undefined) return nullsLast ? -1 : 1
+
+    // A value that isn't an option sorts after every option in either direction.
+    const ranks = getSelectOptionRanks(column)
+    const unknownRank = direction === 'desc' ? -1 : ranks.size
+    const result = (ranks.get(a) ?? unknownRank) - (ranks.get(b) ?? unknownRank)
+    return direction === 'desc' ? -result : result
+  }
+
+  if ([UITypes.Formula, UITypes.User].includes(uidt)) {
+    nullsLast = !nullsLast
+  }
+
+  if (a === null || a === undefined) {
+    return nullsLast ? 1 : -1
+  }
+  if (b === null || b === undefined) {
+    return nullsLast ? -1 : 1
+  }
+
+  if (a === '' && b !== '') return nullsLast ? 1 : -1
+  if (b === '' && a !== '') return nullsLast ? -1 : 1
+
+  let result = 0
+
+  switch (uidt) {
+    case UITypes.Number:
+    case UITypes.Decimal:
+    case UITypes.Currency:
+    case UITypes.Percent:
+    case UITypes.Rating:
+    case UITypes.Duration:
+    case UITypes.ID:
+      result = Number(a) - Number(b)
+      break
+
+    // a formula rollup can also yield text or dates
+    case UITypes.Rollup:
+      result = isNaN(Number(a)) || isNaN(Number(b)) ? String(a).localeCompare(String(b)) : Number(a) - Number(b)
+      break
+
+    case UITypes.Links: {
+      const getLinksValue = (links: any) => {
+        if (links === null) return null
+
+        if (typeof links === 'number') return links
+
+        if (links && typeof links === 'object') {
+          return Object.values(links)[0]
+        }
+        return links
+      }
+
+      const valA = getLinksValue(a)
+      const valB = getLinksValue(b)
+
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        result = valA - valB
+      } else {
+        result = String(valA).localeCompare(String(valB))
+      }
+      break
+    }
+
+    case UITypes.DateTime:
+    case UITypes.CreatedTime:
+    case UITypes.LastModifiedTime:
+      result = dayjs(a).valueOf() - dayjs(b).valueOf()
+      break
+    case UITypes.Time: {
+      const normalizeTimeValue = (value: any): dayjs.Dayjs => {
+        // If it's already a dayjs object
+        if (dayjs.isDayjs(value)) {
+          return dayjs(`1999-01-01 ${value.format('HH:mm:ss')}`)
+        }
+
+        // If it's a string in HH:mm:ss format (from server)
+        if (typeof value === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(value)) {
+          return dayjs(`1999-01-01 ${value}`)
+        }
+
+        // If it's a string in HH:mm format (from local state)
+        if (typeof value === 'string' && /^\d{2}:\d{2}$/.test(value)) {
+          return dayjs(`1999-01-01 ${value}:00`)
+        }
+
+        // For any other format, try parsing with dayjs
+        let parsed = dayjs(value)
+
+        // If not valid, try parsing as time only
+        if (!parsed.isValid()) {
+          parsed = dayjs(value, 'HH:mm:ss')
+        }
+
+        // If still not valid, try with dummy date
+        if (!parsed.isValid()) {
+          parsed = dayjs(`1999-01-01 ${value}`)
+        }
+
+        return parsed
+      }
+
+      const timeA = normalizeTimeValue(a)
+      const timeB = normalizeTimeValue(b)
+      result = timeA.valueOf() - timeB.valueOf()
+      break
+    }
+
+    case UITypes.Year:
+      result = Number(a) - Number(b)
+      break
+
+    case UITypes.Checkbox:
+      result = a === b ? 0 : a ? -1 : 1
+      break
+    case UITypes.SingleSelect:
+    case UITypes.MultiSelect:
+      result = String(a).localeCompare(String(b))
+      break
+    case UITypes.Attachment: {
+      const getAttachmentValue = (att) => {
+        if (Array.isArray(att) && att.length > 0) {
+          return att[0].title || att[0].path || ''
+        }
+        return ''
+      }
+      result = getAttachmentValue(a).localeCompare(getAttachmentValue(b))
+      break
+    }
+    case UITypes.User:
+    case UITypes.CreatedBy:
+    case UITypes.LastModifiedBy: {
+      const getUserValue = (user) => {
+        if (Array.isArray(user) && user.length > 0) {
+          return extractUserDisplayNameOrEmail(user[0])
+        }
+        if (user && typeof user === 'object') {
+          return extractUserDisplayNameOrEmail(user)
+        }
+        return String(user)
+      }
+      result = getUserValue(a).localeCompare(getUserValue(b))
+      break
+    }
+
+    case UITypes.SingleLineText:
+    case UITypes.LongText:
+    case UITypes.Email:
+    case UITypes.URL:
+    case UITypes.PhoneNumber:
+    case UITypes.Formula:
+      if (caseSensitive) {
+        result = String(a).localeCompare(String(b))
+      } else {
+        result = String(a).toLowerCase().localeCompare(String(b).toLowerCase())
+      }
+      break
+
+    case UITypes.JSON:
+      result = JSON.stringify(a).localeCompare(JSON.stringify(b))
+      break
+
+    default:
+      result = String(a).localeCompare(String(b))
+  }
+
+  return direction === 'desc' ? -result : result
+}
+
+// The server skips a disabled sort (sortV2), so client-side ordering must too. `0` comes from
+// dialects without a boolean type.
+export const getActiveSorts = <T extends SortType>(sorts: T[]): T[] =>
+  sorts.filter((sort) => sort.enabled !== false && `${sort.enabled}` !== '0')
+
+export const isSortRelevantChange = (
+  changedFields: string[],
+  sorts: SortType[],
+  columnsById: Record<string, ColumnType>,
+): boolean => {
+  const sortColumnTitles = new Set(
+    getActiveSorts(sorts)
+      .map((sort) => columnsById[sort.fk_column_id!]?.title)
+      .filter(Boolean),
+  )
+
+  return changedFields.some((field) => sortColumnTitles.has(field))
+}
+
+export const getColumnUidtByID = (key?: string, columns?: ColumnType[] | Record<string, ColumnType>) => {
+  let columnByID: Record<string, ColumnType> = {}
+  if (!key || !columns) {
+    return ''
+  } else if (Array.isArray(columns)) {
+    columnByID = columns.reduce((obj, col) => {
+      if (col.id) {
+        obj[col.id] = col
+      }
+      return obj
+    }, {} as Record<string, ColumnType>)
+  } else {
+    columnByID = columns
+  }
+  if (!columnByID[key]) return ''
+  const column = columnByID[key]
+
+  let uidt = column.uidt
+
+  if (column.uidt === UITypes.Formula) {
+    uidt =
+      getEquivalentUIType({
+        formulaColumn: column,
+      }) || uidt
+  }
+
+  // a rollup sorts as its result type
+  if (column.uidt === UITypes.Rollup) {
+    uidt = getRollupResultUidt(column) ?? uidt
+  }
+
+  return uidt || ''
+}

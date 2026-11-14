@@ -1,0 +1,209 @@
+import { ncIsNull, ncIsNumber, ncIsUndefined } from 'universaldatabase-sdk';
+import { NcError } from 'src/helpers/catchError';
+import { ncIsStringHasValue } from '../../utils/handlerUtils';
+import type { Knex } from 'knex';
+import type { IBaseModelSqlV2 } from 'src/db/IBaseModelSqlV2';
+import type { NcContext } from 'universaldatabase-sdk';
+import type {
+  FilterOptions,
+  FilterVerificationResult,
+} from '~/db/field-handler/field-handler.interface';
+import type { Column, Filter } from '~/models';
+import type { MetaService } from 'src/meta/meta.service';
+import type CustomKnex from 'src/db/CustomKnex';
+import { GenericFieldHandler } from '~/db/field-handler/handlers/generic';
+
+const DECIMAL_STRING = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i;
+
+export class DecimalGeneralHandler extends GenericFieldHandler {
+  override async verifyFilter(filter: Filter, column: Column) {
+    const supportedOperations = [
+      'gb_eq',
+      'gb_null',
+      'eq',
+      'neq',
+      'blank',
+      'notblank',
+      'is',
+      'isnot',
+      'gt',
+      'lt',
+      'gte',
+      'lte',
+      'ge',
+      'le',
+      'in',
+      'like',
+      'nlike',
+      'empty',
+      'notempty',
+      'null',
+      'notnull',
+      'btw',
+      'nbtw',
+    ];
+    if (!supportedOperations.includes(filter.comparison_op)) {
+      return {
+        isValid: false,
+        errors: [
+          `Operation ${filter.comparison_op} is not supported for type ${column.uidt} on column ${column.title}`,
+        ],
+      } as FilterVerificationResult;
+    }
+
+    // `is`/`isnot` carry a control keyword (null, notnull, blank, ...) as their
+    // value rather than a numeric value, so the numeric check below must not run
+    // for them — otherwise `(field,is,null)` is rejected as an invalid number.
+    if (['is', 'isnot'].includes(filter.comparison_op)) {
+      return {
+        isValid: true,
+      } as FilterVerificationResult;
+    }
+
+    // `btw`/`nbtw` take "lower,upper" (or the parsed [lower, upper]).
+    if (['btw', 'nbtw'].includes(filter.comparison_op)) {
+      const bounds = Array.isArray(filter.value)
+        ? filter.value
+        : String(filter.value ?? '').split(',');
+      const valid =
+        bounds.length === 2 &&
+        bounds.every(
+          (b) => b !== null && String(b).trim() !== '' && ncIsNumber(Number(b)),
+        );
+      return (
+        valid
+          ? { isValid: true }
+          : {
+              isValid: false,
+              errors: [
+                `Operation ${filter.comparison_op} on column ${column.title} takes two numbers: lower,upper`,
+              ],
+            }
+      ) as FilterVerificationResult;
+    }
+
+    if (
+      !(
+        typeof filter.value === 'undefined' ||
+        filter.value === null ||
+        typeof filter.value === 'number' ||
+        ncIsNumber(Number(filter.value)) ||
+        (filter.comparison_op === 'in' &&
+          (Array.isArray(filter.value) || typeof filter.value === 'string'))
+      )
+    ) {
+      return {
+        isValid: false,
+        errors: [
+          `Value ${filter.value} is not supported for type ${column.uidt} on column ${column.title}`,
+        ],
+      } as FilterVerificationResult;
+    }
+    return {
+      isValid: true,
+    } as FilterVerificationResult;
+  }
+
+  override async parseUserInput(params: {
+    value: any;
+    row: any;
+    column: Column;
+    options?: {
+      baseModel?: IBaseModelSqlV2;
+      context?: NcContext;
+      metaService?: MetaService;
+    };
+  }): Promise<{ value: any }> {
+    // Number('') is 0, which would store a zero for a cleared cell.
+    if (typeof params.value === 'string' && params.value.trim() === '') {
+      return { value: null };
+    }
+    if (!ncIsUndefined(params.value) && !ncIsNull(params.value)) {
+      const numberValue = Number(params.value);
+      if (
+        !ncIsNumber(numberValue) ||
+        typeof params.value === 'boolean' ||
+        // Number() also reads hex/binary/octal literals ("0x1A" -> 26).
+        (typeof params.value === 'string' &&
+          !DECIMAL_STRING.test(params.value.trim()))
+      ) {
+        NcError.invalidValueForField({
+          value: params.value,
+          column: params.column.title,
+          type: params.column.uidt,
+        });
+      }
+      return { value: numberValue };
+    }
+    return { value: params.value };
+  }
+
+  override async filterBlank(
+    args: {
+      sourceField: string | Knex.QueryBuilder | Knex.RawBuilder;
+      val: any;
+    },
+    _rootArgs: { knex: CustomKnex; filter: Filter; column: Column },
+    _options: FilterOptions,
+  ) {
+    const { sourceField } = args;
+
+    return {
+      rootApply: undefined,
+      clause: (qb: Knex.QueryBuilder) => {
+        qb.whereNull(sourceField as any);
+      },
+    };
+  }
+
+  override async filterNotblank(
+    args: {
+      sourceField: string | Knex.QueryBuilder | Knex.RawBuilder;
+      val: any;
+    },
+    _rootArgs: { knex: CustomKnex; filter: Filter; column: Column },
+    _options: FilterOptions,
+  ) {
+    const { sourceField } = args;
+
+    return {
+      rootApply: undefined,
+      clause: (qb: Knex.QueryBuilder) => {
+        qb.whereNotNull(sourceField as any);
+      },
+    };
+  }
+
+  override async filterNeq(
+    args: {
+      sourceField: string | Knex.QueryBuilder | Knex.RawBuilder;
+      val: any;
+    },
+    rootArgs: {
+      knex: CustomKnex;
+      filter: Filter;
+      column: Column;
+    },
+    _options: FilterOptions,
+  ) {
+    const { val, sourceField } = args;
+    const { knex } = rootArgs;
+
+    return {
+      rootApply: undefined,
+      clause: (qb: Knex.QueryBuilder) => {
+        if (!ncIsStringHasValue(val)) {
+          qb.where((nestedQb) => {
+            nestedQb.whereNotNull(sourceField as any);
+          });
+        } else {
+          qb.where((nestedQb) => {
+            nestedQb
+              .where(knex.raw('?? != ?', [sourceField, val]))
+              .orWhereNull(sourceField as any);
+          });
+        }
+      },
+    };
+  }
+}

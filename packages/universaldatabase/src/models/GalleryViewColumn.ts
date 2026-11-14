@@ -1,0 +1,196 @@
+import type { BoolType } from 'universaldatabase-sdk';
+import type { NcContext } from '~/interface/config';
+import View from '~/models/View';
+import Universal Database from '~/Universal Database';
+import UniversalDatabaseCache from '~/cache/UniversalDatabaseCache';
+import { extractProps } from '~/helpers/extractProps';
+import { replayedViewColumnId } from '~/helpers/viewColumnReplay';
+import { CacheGetType, CacheScope, MetaTable } from '~/utils/globals';
+
+export default class GalleryViewColumn {
+  id: string;
+  title?: string;
+  show?: BoolType;
+  order?: number;
+
+  fk_view_id: string;
+  fk_column_id: string;
+  fk_workspace_id?: string;
+  base_id?: string;
+  source_id?: string;
+
+  constructor(data: GalleryViewColumn) {
+    Object.assign(this, data);
+  }
+
+  public static async get(
+    context: NcContext,
+    galleryViewColumnId: string,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    let viewColumn =
+      galleryViewColumnId &&
+      (await UniversalDatabaseCache.get(
+        context,
+        `${CacheScope.GALLERY_VIEW_COLUMN}:${galleryViewColumnId}`,
+        CacheGetType.TYPE_OBJECT,
+      ));
+    if (!viewColumn) {
+      viewColumn = await ncMeta.metaGet2(
+        context.workspace_id,
+        context.base_id,
+        MetaTable.GALLERY_VIEW_COLUMNS,
+        galleryViewColumnId,
+      );
+      if (viewColumn) {
+        await UniversalDatabaseCache.set(
+          context,
+          `${CacheScope.GALLERY_VIEW_COLUMN}:${galleryViewColumnId}`,
+          viewColumn,
+        );
+      }
+    }
+    return viewColumn && new GalleryViewColumn(viewColumn);
+  }
+  static async insert(
+    context: NcContext,
+    column: Partial<GalleryViewColumn>,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const insertObj = extractProps(column, [
+      'fk_view_id',
+      'fk_column_id',
+      'show',
+      'base_id',
+      'source_id',
+    ]);
+    const replayId = replayedViewColumnId(
+      insertObj.fk_view_id,
+      insertObj.fk_column_id,
+    );
+    if (replayId) insertObj.id = replayId;
+
+    insertObj.order = await ncMeta.metaGetNextOrder(
+      MetaTable.GALLERY_VIEW_COLUMNS,
+      {
+        fk_view_id: column.fk_view_id,
+      },
+    );
+
+    if (!insertObj.source_id) {
+      const viewRef = await View.get(
+        context,
+        insertObj.fk_view_id,
+        false,
+        ncMeta,
+      );
+      insertObj.source_id = viewRef.source_id;
+    }
+
+    const { id } = await ncMeta.metaInsert2(
+      context.workspace_id,
+      context.base_id,
+      MetaTable.GALLERY_VIEW_COLUMNS,
+      insertObj,
+    );
+
+    // on new view column, delete any optimised single query cache
+    {
+      const view = await View.get(context, column.fk_view_id, false, ncMeta);
+      if (view) {
+        await View.clearSingleQueryCache(
+          context,
+          view.fk_model_id,
+          [view],
+          ncMeta,
+        );
+      }
+    }
+
+    return this.get(context, id, ncMeta).then(async (viewColumn) => {
+      await UniversalDatabaseCache.appendToList(
+        context,
+        CacheScope.GALLERY_VIEW_COLUMN,
+        [column.fk_view_id],
+        `${CacheScope.GALLERY_VIEW_COLUMN}:${id}`,
+      );
+      return viewColumn;
+    });
+  }
+
+  public static async list(
+    context: NcContext,
+    viewId: string,
+    ncMeta = UniversalDatabase.ncMeta,
+  ): Promise<GalleryViewColumn[]> {
+    const cachedList = await UniversalDatabaseCache.getList(
+      context,
+      CacheScope.GALLERY_VIEW_COLUMN,
+      [viewId],
+    );
+    let { list: views } = cachedList;
+    const { isNoneList } = cachedList;
+    if (!isNoneList && !views.length) {
+      views = await ncMeta.metaList2(
+        context.workspace_id,
+        context.base_id,
+        MetaTable.GALLERY_VIEW_COLUMNS,
+        {
+          condition: {
+            fk_view_id: viewId,
+          },
+          orderBy: {
+            order: 'asc',
+          },
+        },
+      );
+      await UniversalDatabaseCache.setList(
+        context,
+        CacheScope.GALLERY_VIEW_COLUMN,
+        [viewId],
+        views,
+      );
+    }
+    views.sort(
+      (a, b) =>
+        (a.order != null ? a.order : Infinity) -
+        (b.order != null ? b.order : Infinity),
+    );
+    return views?.map((v) => new GalleryViewColumn(v));
+  }
+
+  static async update(
+    context: NcContext,
+    columnId: string,
+    body: Partial<GalleryViewColumn>,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    const updateObj = extractProps(body, ['order', 'show']);
+
+    // set meta
+    const res = await ncMeta.metaUpdate(
+      context.workspace_id,
+      context.base_id,
+      MetaTable.GALLERY_VIEW_COLUMNS,
+      updateObj,
+      columnId,
+    );
+
+    // get existing cache
+    const key = `${CacheScope.GALLERY_VIEW_COLUMN}:${columnId}`;
+    await UniversalDatabaseCache.update(context, key, updateObj);
+
+    // on view column update, delete any optimised single query cache
+    {
+      const viewCol = await this.get(context, columnId, ncMeta);
+      if (viewCol?.fk_view_id) {
+        const view = await View.get(context, viewCol.fk_view_id, false, ncMeta);
+        if (view) {
+          await View.clearSingleQueryCache(context, view.fk_model_id, [view]);
+        }
+      }
+    }
+
+    return res;
+  }
+}

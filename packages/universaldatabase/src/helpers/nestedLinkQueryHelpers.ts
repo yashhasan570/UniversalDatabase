@@ -1,0 +1,588 @@
+import {
+  encodeQueryFilterToken,
+  extractFilterFromXwhere,
+  isLinksOrLTAR,
+  NcApiVersion,
+} from 'universaldatabase-sdk';
+import type { FilterType } from 'universaldatabase-sdk';
+import type { NcContext } from '~/interface/config';
+import type { LinkToAnotherRecordColumn, Model } from '~/models';
+import { Column } from '~/models';
+import { hasLimitedRelatedTableAccess } from '~/helpers/tableHelpers';
+import { isSharedViewAccess } from '~/helpers/accessSource';
+import { LIST_ARG_ALIASES } from '~/helpers/listArgAliases';
+
+/**
+ * Pre-parsed filter/sort spellings `list()` also reads (`args.filterArr` /
+ * `args.sortArr`, the `Json` forms on routes that parse them). They bypass
+ * the `where`/`sort` parsers, so the gates below confine them separately.
+ */
+export const ARRAY_QUERY_KEYS = [
+  'filterArrJson',
+  'filterArr',
+  'sortArrJson',
+  'sortArr',
+] as const;
+
+// A request leaf may name a second column to compare against (field-to-field).
+type ColumnRefFilter = FilterType & { fk_value_col_id?: string };
+
+// The parsers set `meta.ltarSubField` for a link filtered by its id (`Link.Id`).
+type ParsedFilter = FilterType & { meta?: { ltarSubField?: string } };
+
+/**
+ * Reports whether any leaf references a known-but-hidden (non-exposed) column.
+ * Used as a fast guard so the strip/re-serialize below only runs when there is
+ * actually something to strip — otherwise the original `where` is left untouched.
+ */
+export function filtersReferenceHiddenColumn(
+  filters: ColumnRefFilter[] | undefined,
+  exposedColumnIds: Set<string>,
+): boolean {
+  for (const filter of filters || []) {
+    if (filter.is_group) {
+      if (
+        filtersReferenceHiddenColumn(
+          filter.children as ColumnRefFilter[],
+          exposedColumnIds,
+        )
+      ) {
+        return true;
+      }
+    } else if (
+      (filter.fk_column_id && !exposedColumnIds.has(filter.fk_column_id)) ||
+      (filter.fk_value_col_id && !exposedColumnIds.has(filter.fk_value_col_id))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Removes leaves that reference a known-but-hidden (non-exposed) column from a
+ * parsed filter tree, pruning any group left empty. Leaves whose column can't be
+ * resolved (no `fk_column_id`) are kept — they resolve to nothing downstream and
+ * are harmless. Returns the surviving filters.
+ */
+export function stripHiddenColumnFilters(
+  filters: ColumnRefFilter[] | undefined,
+  exposedColumnIds: Set<string>,
+  // When given, ids outside it are unknown and kept, so they still fail verification.
+  knownColumnIds?: Set<string>,
+): FilterType[] {
+  const survivors: FilterType[] = [];
+  for (const filter of filters || []) {
+    if (filter.is_group) {
+      const children = stripHiddenColumnFilters(
+        filter.children as ColumnRefFilter[],
+        exposedColumnIds,
+        knownColumnIds,
+      );
+      if (children.length) survivors.push({ ...filter, children });
+    } else if (
+      // A field-to-field value column can resolve on any table, so it must be exposed.
+      (!filter.fk_value_col_id ||
+        exposedColumnIds.has(filter.fk_value_col_id)) &&
+      (!filter.fk_column_id ||
+        exposedColumnIds.has(filter.fk_column_id) ||
+        (knownColumnIds && !knownColumnIds.has(filter.fk_column_id)))
+    ) {
+      survivors.push(filter);
+    }
+    // else: known-but-hidden column — drop this leaf, keep the rest
+  }
+  return survivors;
+}
+
+/**
+ * Re-serializes a parsed filter tree to the v2 xwhere string. Used to re-emit a
+ * `where` after hidden-column leaves have been stripped — every downstream
+ * consumer re-parses the string.
+ *
+ * `quoted` emits the `@` grammar, which every api version accepts and where a
+ * quoted value holding `,` `(` `)` or a quote stays one token. Otherwise values
+ * are written bare, which only the legacy parser reads as before.
+ */
+function serializeFiltersToXwhere(
+  filters: ParsedFilter[],
+  columnById: Map<string, { title?: string }>,
+  quoted: boolean,
+): string | undefined {
+  const token = (v: unknown) =>
+    quoted ? encodeQueryFilterToken(String(v ?? '')) : String(v);
+  let representable = true;
+
+  const one = (filter: ParsedFilter, isFirst: boolean): string => {
+    const children = (filter.children as ParsedFilter[]) || [];
+    // The `@` parser unwraps a one-child group and drops its logical op, so
+    // the child carries it instead; `~or` over a `~not` child has no form.
+    if (quoted && filter.is_group && children.length === 1) {
+      const [child] = children;
+      if (child.logical_op !== 'not') {
+        return one({ ...child, logical_op: filter.logical_op }, isFirst);
+      }
+      if (
+        filter.logical_op === 'not' ||
+        !(isFirst || (filter.logical_op ?? 'and') === 'and')
+      ) {
+        representable = false;
+      }
+      return one(child, isFirst);
+    }
+
+    let clause: string;
+    if (filter.is_group) {
+      clause = `(${children.map((c, i) => one(c, i === 0)).join('')})`;
+    } else {
+      const title =
+        columnById.get(filter.fk_column_id)?.title ?? filter.fk_column_id;
+      const { ltarSubField } = filter.meta ?? {};
+      const field = ltarSubField ? `${title}.${ltarSubField}` : title;
+      const parts = [token(field), filter.comparison_op];
+      if (filter.comparison_sub_op) parts.push(filter.comparison_sub_op);
+      if (filter.value !== undefined && filter.value !== null) {
+        parts.push(
+          ...(Array.isArray(filter.value) ? filter.value : [filter.value]).map(
+            token,
+          ),
+        );
+      }
+      clause = `(${parts.join(',')})`;
+    }
+    // The `@` parser takes `~not` only at the start of a group.
+    if (quoted && filter.logical_op === 'not') {
+      return isFirst ? `~not${clause}` : `~and(~not${clause})`;
+    }
+    if (isFirst) return filter.logical_op === 'not' ? `~not${clause}` : clause;
+    return `~${filter.logical_op || 'and'}${clause}`;
+  };
+  const xwhere = filters.map((f, i) => one(f, i === 0)).join('');
+  if (!representable) return undefined;
+  return quoted ? `@${xwhere}` : xwhere;
+}
+
+type NormalizedFilter = {
+  op: 'and' | 'or' | 'not';
+  leaf?: unknown[];
+  children?: NormalizedFilter[];
+};
+
+/**
+ * A filter tree reduced to what the compiler acts on, so trees the two parsers
+ * nest differently compare equal: a first child's op counts as `and` (unless
+ * `not`), a one-child group is its child carrying the group's op, and a list
+ * holding only an `and` group is that group's children.
+ */
+function normalizeFilterTree(
+  filters: ParsedFilter[] | undefined,
+): NormalizedFilter[] {
+  const nodes = (filters || []).map((filter, i): NormalizedFilter => {
+    const op =
+      filter.logical_op === 'not'
+        ? 'not'
+        : i === 0 || filter.logical_op !== 'or'
+        ? 'and'
+        : 'or';
+    if (!filter.is_group) {
+      return {
+        op,
+        leaf: [
+          filter.fk_column_id,
+          filter.meta?.ltarSubField || null,
+          filter.comparison_op,
+          filter.comparison_sub_op || null,
+          // Parsers differ on an absent value: undefined, null or ''.
+          Array.isArray(filter.value)
+            ? filter.value.map(String)
+            : filter.value === undefined ||
+              filter.value === null ||
+              filter.value === ''
+            ? null
+            : String(filter.value),
+        ],
+      };
+    }
+    const children = normalizeFilterTree(filter.children as ParsedFilter[]);
+    if (children.length === 1) {
+      const [child] = children;
+      if (child.op === 'and') return { ...child, op };
+      if (op === 'and') return child;
+    }
+    return { op, children };
+  });
+  return nodes.length === 1 && nodes[0].children && nodes[0].op === 'and'
+    ? nodes[0].children
+    : nodes;
+}
+
+/**
+ * Keeps only the sort terms that target an exposed (or unknown/harmless) column.
+ *
+ * Mirrors the parsing in `extractSortsObject` (the downstream compiler) so the two
+ * never disagree about which column a term resolves to:
+ *  - V3 sort is a JSON array of `{ field, direction }` — either a JSON string or an
+ *    already-parsed array. The old `String(sort).split(',')` turned that into garbage
+ *    tokens that matched no alias and survived, leaving an ordering oracle on hidden
+ *    columns. Here we parse it the same way `extractSortsObject` does and resolve each
+ *    `field` via the alias map.
+ *  - V2 sort is a comma-separated string (or array) of field names, each optionally
+ *    prefixed with a sort operator (`-`, `~-`, `~+`, `+`).
+ *
+ * A term whose field doesn't resolve to a known column is left in place — it resolves
+ * to nothing downstream and is harmless; a known-but-hidden reference is the oracle to
+ * drop. Returns `undefined` when nothing survives, preserving the input shape otherwise.
+ */
+export function sanitizeSortValue(
+  sort: string | string[] | { field?: string; direction?: string }[],
+  aliasColObjMap: { [columnAlias: string]: Column },
+  exposedColumnIds: Set<string>,
+  apiVersion?: NcApiVersion,
+): string | string[] | { field?: string; direction?: string }[] | undefined {
+  const isExposedOrUnknown = (colId?: string) =>
+    !colId || exposedColumnIds.has(colId);
+
+  // V3 — JSON array of `{ field, direction }`, as a JSON string or parsed array.
+  if (apiVersion === NcApiVersion.V3) {
+    const wasString = typeof sort === 'string';
+    let parsed: any = sort;
+    if (wasString) {
+      try {
+        parsed = JSON.parse(sort as string);
+      } catch {
+        parsed = sort;
+      }
+    }
+    if (!Array.isArray(parsed)) parsed = [parsed];
+
+    const kept = (parsed as { field?: string; direction?: string }[]).filter(
+      (s) => isExposedOrUnknown(aliasColObjMap[s?.field]?.id),
+    );
+    if (!kept.length) return undefined;
+    return wasString ? JSON.stringify(kept) : kept;
+  }
+
+  // V2 — comma-separated string or array of strings, each optionally prefixed
+  // with a sort operator (`-`, `~-`, `~+`, `+`).
+  const wasArray = Array.isArray(sort);
+  const terms = (wasArray ? (sort as string[]) : String(sort).split(','))
+    .map((t) => String(t).trim())
+    .filter(Boolean)
+    .filter((term) =>
+      isExposedOrUnknown(aliasColObjMap[term.replace(/^~?[+-]/, '')]?.id),
+    );
+  if (!terms.length) return undefined;
+  return wasArray ? terms : terms.join(',');
+}
+
+/**
+ * Restricts the caller-supplied `where`/`sort` on a nested-link list to the
+ * columns the link actually exposes.
+ *
+ * When the caller lacks visibility access to the related table, the nested fetch is
+ * restricted to the link's primary key, primary value and (optional) custom
+ * display-value column via `pkAndPvOnly`/`extractOnlyPrimaries`. The caller-supplied
+ * `where`/`sort`, however, are otherwise compiled against the related table's full
+ * column set, turning any hidden column into a one-bit oracle
+ * (`where=(Secret,like,X%)` → the related row matches or it doesn't; `sort` reorders
+ * by the hidden value). Stripping references to non-exposed columns keeps the
+ * predicate confined to what the link already shows, mirroring the public
+ * shared-view sanitizer.
+ *
+ * The restriction must match the fetch's actual SELECT exposure so the predicate and
+ * the SELECT never disagree about what's visible — which differs by path:
+ *  - a SHARED VIEW / SHARED FORM always restricts: the tables a shared view links
+ *    to are not published, so its SELECT is pk/pv/display-only. Checked FIRST and
+ *    not relaxable by a caller. NOT implied by "anonymous" — with no user
+ *    `hasTableVisibilityAccess` falls back to `hasDefaultTableVisibility`, `true`
+ *    whenever no TABLE_VISIBILITY row exists, so a same-base link on a shared view
+ *    used to be unrestricted in both the SELECT and the predicate.
+ *  - when the caller threads in `hasLimitedAccess` (the EE optimized list path, which
+ *    SELECTs the full column set whenever the user has visibility access —
+ *    `extractOnlyPrimaries: hasLimitedAccess`): the gate is exactly that same value,
+ *    so a cross-base link whose related table the user CAN see exposes everything and
+ *    its `where`/`sort` apply unchanged (restricting it would silently drop legitimate
+ *    filters on shown columns, e.g. searching the picker by a displayed non-pv field).
+ *    The caller computes that access in the related table's own context, so cross-base
+ *    roles are evaluated correctly and the predicate and SELECT resolve visibility from
+ *    a single source.
+ *  - default (CE fetcher, legacy routes) SELECTs pk/pv-only for ANY cross-base link OR
+ *    any visibility-limited table, independent of the caller's incidental access
+ *    (`pkAndPvOnly: isCrossBaseLink() || hasLimitedAccess`). There the gate stays the
+ *    conservative `isCrossBaseLink() || !access`. Relaxing it would reopen the oracle
+ *    on MySQL/disabled-optimization (unoptimized fetcher), where the SELECT genuinely
+ *    hides the columns.
+ *  - v2/v3 `/links/` (`DataTableService.nestedDataList`): where/sort follow
+ *    `hasLimitedAccess` alone; the caller holds the projection to pk/pv separately for
+ *    any cross-base link. Safe because the oracle only matters to a caller without
+ *    access — don't copy this where the predicate must match the SELECT.
+ *
+ * Must be invoked at every nested-link entry point that forwards request query to a
+ * fetcher — because the EE optimized path builds its own query from `param.query`
+ * and never funnels through the shared `BaseModelSqlv2.mmList`/`hmList`, sanitizing
+ * the query at the entry point covers both the optimized and unoptimized fetchers.
+ * The covered surfaces:
+ *  - the v2/v3 `/links/` endpoint and its copy/paste/delete-all diff;
+ *  - the v1 `/mm/`,`/hm/`,`/bt/`,`/oo/` linked-list endpoints;
+ *  - the legacy `/data/:viewId/:rowId/mm|hm/:colId` route;
+ *  - the excluded-list / link-picker endpoints (`mm/hm/bt/ooExcludedList`) — the
+ *    same `pkAndPvOnly` restriction applies over the *unlinked* rows;
+ *  - the public shared-view `/mm/`,`/hm/` endpoints (`publicMmList`/`publicHmList`)
+ *    and the shared form/gallery link picker (`relDataList`, `/nested/:columnId`).
+ *
+ * Mutates `query` in place — both the data fetch and the count read from it.
+ */
+export async function restrictNestedLinkQuery(
+  context: NcContext,
+  colOptions: LinkToAnotherRecordColumn,
+  relatedModel: Model,
+  query: Record<string, any>,
+  options?: {
+    /**
+     * Precomputed "user lacks visibility access to the related table" decision,
+     * threaded from the EE optimized list path (`extractOnlyPrimaries:
+     * hasLimitedAccess`) and v2/v3 `/links/`. When provided, the where/sort is
+     * restricted iff this is true. Omitted everywhere else, where the conservative
+     * cross-base gate is computed here (see fn docs).
+     */
+    hasLimitedAccess?: boolean;
+  },
+): Promise<void> {
+  if (!query) return;
+
+  // Nothing to sanitize — skip the access check and column lookup entirely.
+  if (
+    ![
+      ...LIST_ARG_ALIASES.where,
+      ...LIST_ARG_ALIASES.sort,
+      ...ARRAY_QUERY_KEYS,
+    ].some((key) => query[key])
+  )
+    return;
+
+  // The related table may live in another base — resolve its own context for the
+  // column lookup below.
+  const { refContext } = colOptions.getRelContext();
+
+  // Gate the restriction to the fetch's actual SELECT exposure (see fn docs):
+  //  - a shared view/form ALWAYS restricts — the related table is not published.
+  //    Checked first, so a caller-supplied `hasLimitedAccess: false` can't override;
+  //  - when the caller threads in `hasLimitedAccess` (the EE optimized SELECT's own
+  //    access decision): restrict iff the user lacks access — the same value the
+  //    SELECT uses, so the two can't disagree;
+  //  - default: restrict for any cross-base link or visibility-limited table.
+  const restricted =
+    isSharedViewAccess(context) ||
+    (options?.hasLimitedAccess !== undefined
+      ? options.hasLimitedAccess
+      : colOptions.isCrossBaseLink() ||
+        (await hasLimitedRelatedTableAccess(context, relatedModel.id)));
+
+  if (!restricted) return;
+
+  // Resolve the related table's columns in its own context and into a local list
+  // (don't mutate the shared model's column cache, which the downstream
+  // fetcher/count rely on).
+  const columns = await Column.list(refContext, {
+    fk_model_id: relatedModel.id,
+  });
+  const displayValueColId = colOptions.fk_display_value_column_id;
+  const exposedColumnIds = new Set(
+    columns
+      .filter((c) => c.pk || c.pv || c.id === displayValueColId)
+      .map((c) => c.id),
+  );
+
+  await restrictQueryToExposedColumns(context, {
+    model: relatedModel,
+    columns,
+    query,
+    exposedColumnIds,
+  });
+}
+
+/**
+ * Strips `where` leaves, `sort` terms and `filterArr`/`sortArr` entries (both
+ * spellings) referencing a column outside `exposedColumnIds`, in place on
+ * `query`. Shared by the nested-link restriction
+ * (exposed = the link's pk/pv/display) and the shared-view one (exposed = the
+ * view's visible columns) — both are security gates, so one implementation.
+ *
+ * EVERY alias spelling present is rewritten, not just the one `getListArgs`
+ * would pick: sanitizing only the current winner would let a change to that
+ * precedence promote an untouched alias into the compiler.
+ *
+ * An unresolvable reference is LEFT ALONE: it resolves to nothing downstream, and
+ * dropping it would change the error behaviour of malformed queries.
+ */
+export async function restrictQueryToExposedColumns(
+  context: NcContext,
+  {
+    model,
+    columns,
+    query,
+    exposedColumnIds,
+    aliasColObjMap: preResolvedAliasColObjMap,
+  }: {
+    model: Model;
+    /** Pre-resolved column list for `model` (never mutated). */
+    columns: Column[];
+    /** Mutated in place — both the data fetch and the count read from it. */
+    query: Record<string, any>;
+    exposedColumnIds: Set<string>;
+    /** Pre-resolved alias map for `model`; derived from `columns` if absent. */
+    aliasColObjMap?: Record<string, Column>;
+  },
+): Promise<void> {
+  const whereKeys = LIST_ARG_ALIASES.where.filter((key) => query?.[key]);
+  const sortKeys = LIST_ARG_ALIASES.sort.filter((key) => query?.[key]);
+
+  if (
+    !whereKeys.length &&
+    !sortKeys.length &&
+    !ARRAY_QUERY_KEYS.some((key) => query?.[key])
+  )
+    return;
+
+  const aliasColObjMap =
+    preResolvedAliasColObjMap ?? (await model.getAliasColObjMap(columns));
+
+  // Drop only the offending leaves and re-emit the survivors: dropping the whole
+  // `where` would turn a multi-field search into "return every record".
+  for (const key of whereKeys) {
+    const { filters } = extractFilterFromXwhere(
+      context,
+      query[key],
+      aliasColObjMap,
+    );
+    // Only touch the `where` when it actually references a hidden column —
+    // otherwise leave the original string as-is (no re-serialization).
+    if (filtersReferenceHiddenColumn(filters, exposedColumnIds)) {
+      const survivors = stripHiddenColumnFilters(filters, exposedColumnIds);
+      // The rebuild must re-parse to the survivors' tree, so no hidden leaf can
+      // reappear and the leaves combine as requested. Bare values cover what the
+      // `@` grammar can't (a value with both `'` and `"`, `~or` over a lone
+      // `~not`) on the legacy parser; anything else drops the where.
+      const columnById = new Map(columns.map((c) => [c.id, c]));
+      const survivorTree = JSON.stringify(normalizeFilterTree(survivors));
+      const rebuilt = survivors.length
+        ? [true, false]
+            .map((quoted) =>
+              serializeFiltersToXwhere(survivors, columnById, quoted),
+            )
+            .find(
+              (xwhere) =>
+                xwhere &&
+                JSON.stringify(
+                  normalizeFilterTree(
+                    extractFilterFromXwhere(context, xwhere, aliasColObjMap)
+                      .filters,
+                  ),
+                ) === survivorTree,
+            )
+        : undefined;
+      query[key] = rebuilt;
+    }
+  }
+
+  // Keep only sort terms that target an exposed (or unknown/harmless) column.
+  for (const key of sortKeys) {
+    query[key] = sanitizeSortValue(
+      query[key],
+      aliasColObjMap,
+      exposedColumnIds,
+      context.api_version,
+    );
+  }
+
+  // `filterArrJson` / `filterArr` — a pre-parsed tree keyed by `fk_column_id`,
+  // bypassing the xwhere parser. Both spellings: either can reach the compiler.
+  for (const key of ['filterArrJson', 'filterArr']) {
+    const raw = query[key];
+    if (!raw) continue;
+
+    const wasString = typeof raw === 'string';
+    let parsed: unknown = raw;
+    if (wasString) {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue; // malformed — leave it for the downstream parser to reject
+      }
+    }
+    if (!Array.isArray(parsed)) continue;
+
+    const filters = parsed as FilterType[];
+    if (!filtersReferenceHiddenColumn(filters, exposedColumnIds)) continue;
+
+    // unknown ids stay, so verification still rejects them with a 422
+    const survivors = stripHiddenColumnFilters(
+      filters,
+      exposedColumnIds,
+      new Set(columns.map((c) => c.id)),
+    );
+    query[key] = survivors.length
+      ? wasString
+        ? JSON.stringify(survivors)
+        : survivors
+      : undefined;
+  }
+
+  // `sortArrJson` / `sortArr` — `{ field | fk_column_id, direction }` entries.
+  for (const key of ['sortArrJson', 'sortArr']) {
+    const raw = query[key];
+    if (!raw) continue;
+
+    const wasString = typeof raw === 'string';
+    let parsed: unknown = raw;
+    if (wasString) {
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+    }
+    if (!Array.isArray(parsed)) continue;
+
+    const kept = (parsed as { field?: string; fk_column_id?: string }[]).filter(
+      (entry) => {
+        const colId = entry?.fk_column_id ?? aliasColObjMap[entry?.field]?.id;
+        // Unresolvable references are harmless downstream — keep them.
+        return !colId || exposedColumnIds.has(colId);
+      },
+    );
+    if (kept.length === (parsed as unknown[]).length) continue;
+
+    query[key] = kept.length
+      ? wasString
+        ? JSON.stringify(kept)
+        : kept
+      : undefined;
+  }
+}
+
+/**
+ * Convenience wrapper around {@link restrictNestedLinkQuery} for entry points that
+ * hold a resolved link {@link Column} rather than its colOptions/related model.
+ * No-op for non-LTAR columns.
+ */
+export async function restrictNestedLinkQueryForColumn(
+  context: NcContext,
+  column: Column,
+  query: Record<string, any>,
+  options?: { hasLimitedAccess?: boolean },
+): Promise<void> {
+  if (!query || !column || !isLinksOrLTAR(column)) return;
+
+  const colOptions = await column.getColOptions<LinkToAnotherRecordColumn>();
+  if (!colOptions) return;
+
+  const relatedModel = await colOptions.getRelatedTable();
+  await restrictNestedLinkQuery(
+    context,
+    colOptions,
+    relatedModel,
+    query,
+    options,
+  );
+}

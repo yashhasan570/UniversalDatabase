@@ -1,0 +1,8 @@
+{
+  "packages": [
+    "packages/nc-gui",
+    "packages/universaldatabase",
+    "packages/universaldatabase-sdk"
+  ],
+  "version": "independent"
+}

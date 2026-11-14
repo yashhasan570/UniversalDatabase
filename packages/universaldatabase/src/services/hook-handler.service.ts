@@ -1,0 +1,265 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { isFormHiddenColumn, ViewTypes } from 'universaldatabase-sdk';
+import type { OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import type {
+  ColumnType,
+  FormColumnType,
+  FormType,
+  HookType,
+  UserType,
+} from 'universaldatabase-sdk';
+import type { NcContext } from '~/interface/config';
+import {
+  formSubmissionMailData,
+  getAffectedColumns,
+} from '~/helpers/webhookHelpers';
+import { JobTypes } from '~/interface/Jobs';
+import { MailEvent } from '~/interface/Mail';
+import { Base, FormView, Hook, Model, View } from '~/models';
+import { getUsersWithBaseAccess } from '~/helpers/baseAccessHelpers';
+import { getFormResponseCopyRecipient } from '~/helpers/formResponseCopy';
+import { IEventEmitter } from '~/modules/event-emitter/event-emitter.interface';
+import { IJobsService } from '~/modules/jobs/jobs-service.interface';
+import { MailService } from '~/services/mail/mail.service';
+
+export const HANDLE_WEBHOOK = '__nc_handleHooks';
+
+@Injectable()
+export class HookHandlerService implements OnModuleInit, OnModuleDestroy {
+  protected logger = new Logger(HookHandlerService.name);
+  protected unsubscribe: () => void;
+
+  constructor(
+    @Inject('IEventEmitter') protected readonly eventEmitter: IEventEmitter,
+    @Inject('JobsService') protected readonly jobsService: IJobsService,
+    protected readonly mailService: MailService,
+  ) {}
+
+  public async handleViewHooks(
+    _context: NcContext,
+    _param: { hookName; prevData; newData; user; viewId; modelId },
+  ) {}
+
+  public async handleHooks(
+    context: NcContext,
+    param: { hookName; prevData; newData; user; viewId; modelId },
+  ): Promise<void> {
+    const { hookName, prevData, newData, user, viewId, modelId } = param;
+    const [event, operation] = hookName.split('.');
+
+    const view = await View.get(context, viewId);
+    const model = await Model.get(context, modelId);
+
+    // handle form view data submission
+    if (
+      // [DEPRECATED]: v2 support for bulkInsert
+      (hookName === 'after.insert' || hookName === 'after.bulkInsert') &&
+      view &&
+      view.type === ViewTypes.FORM
+    ) {
+      try {
+        const formView = await view.getView<FormView>();
+
+        let emails = Object.entries(JSON.parse(formView?.email) || {})
+          .filter((a) => a[1])
+          .map((a) => a[0]);
+
+        // The form API stores any address; mail only users who can open the base.
+        if (emails.length) {
+          const members = new Set(
+            (
+              await getUsersWithBaseAccess(context, { baseId: model.base_id })
+            ).map((u) => u.email?.toLowerCase()),
+          );
+          emails = emails.filter((email) => members.has(email.toLowerCase()));
+        }
+
+        const submitterEmail = await this.getResponseCopyRecipient(context, {
+          hookName,
+          formView,
+          user,
+        });
+
+        if (emails?.length || submitterEmail) {
+          const { columns } = await FormView.getWithInfo(
+            context,
+            formView.fk_view_id,
+          );
+          const allColumns = await model.getColumns();
+          const fieldById = columns.reduce(
+            (o: Record<string, FormColumnType>, f: FormColumnType) => {
+              return Object.assign(o, { [f.fk_column_id]: f });
+            },
+            {},
+          );
+          let order = 1;
+          const filteredColumns = allColumns
+            // Before the merge below: the form column's meta replaces the field's
+            ?.filter((c) => !isFormHiddenColumn(c))
+            .map((c: ColumnType) => {
+              return {
+                ...c,
+                fk_column_id: c.id,
+                fk_view_id: formView.fk_view_id,
+                ...(fieldById[c.id] ? fieldById[c.id] : {}),
+                order: (fieldById[c.id] && fieldById[c.id].order) || order++,
+                id: fieldById[c.id] && fieldById[c.id].id,
+              };
+            })
+            .sort((a: ColumnType, b: ColumnType) => a.order - b.order)
+            .filter((f: ColumnType & FormColumnType) => f.show)
+            .sort((a: ColumnType, b: ColumnType) => a.order - b.order)
+            .map((c: ColumnType & FormColumnType) => {
+              c.required = !!(c.required || 0);
+              return c;
+            });
+
+          const formattedData = await formSubmissionMailData(context, {
+            model,
+            columns: filteredColumns,
+            data: newData,
+          });
+
+          formView.title = view.title;
+          const base = await Base.get(context, model.base_id);
+
+          // Sent independently: one failing must not drop the other
+          if (emails?.length) {
+            await this.mailService
+              .sendMail({
+                mailEvent: MailEvent.FORM_SUBMISSION,
+                payload: {
+                  formView: formView as FormType,
+                  base,
+                  emails,
+                  model,
+                  data: formattedData,
+                },
+              })
+              .catch((e) =>
+                this.logger.error({
+                  error: e,
+                  details: 'Error while sending form submission email',
+                  hookName,
+                }),
+              );
+          }
+
+          if (submitterEmail) {
+            await this.mailService
+              .sendMail({
+                mailEvent: MailEvent.FORM_SUBMISSION,
+                payload: {
+                  formView: formView as FormType,
+                  base,
+                  emails: [submitterEmail],
+                  model,
+                  data: formattedData,
+                  submitterCopy: true,
+                },
+              })
+              .catch((e) =>
+                this.logger.error({
+                  error: e,
+                  details: 'Error while sending form response copy',
+                  hookName,
+                }),
+              );
+          }
+        }
+      } catch (e) {
+        this.logger.error({
+          error: e,
+          details: 'Error while sending form submission email',
+          hookName,
+        });
+      }
+    }
+
+    const hooks = await Hook.list(context, {
+      fk_model_id: modelId,
+      event: event as HookType['event'],
+      operation: operation as HookType['operation'][0],
+      affectedColumns: await getAffectedColumns(context, {
+        hookName,
+        newData,
+        prevData,
+        model,
+      }),
+    });
+    for (const hook of hooks) {
+      if (hook.active) {
+        try {
+          await this.jobsService.add(JobTypes.HandleWebhook, {
+            context,
+            hookId: hook.id,
+            modelId,
+            viewId,
+            prevData,
+            newData,
+            user,
+            hookName,
+            ncSiteUrl: context.nc_site_url,
+          });
+        } catch (e) {
+          this.logger.error({
+            error: e,
+            details: 'Error while invoking webhook',
+            hook: hook.id,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * The signed-in submitter of a require-sign-in form that sends response
+   * copies. Only those forms carry a verified identity; on any other form the
+   * user is anonymous or cleared.
+   */
+  protected async getResponseCopyRecipient(
+    context: NcContext,
+    {
+      hookName,
+      formView,
+      user,
+    }: {
+      hookName: string;
+      formView: FormView;
+      user?: UserType;
+    },
+  ): Promise<string | null> {
+    if (hookName !== 'after.insert') return null;
+    return getFormResponseCopyRecipient(context, {
+      formView,
+      user,
+      isFeatureEnabled: () => this.canSendResponseCopy(context),
+    });
+  }
+
+  /** Response copies ride on require sign-in, which CE doesn't have */
+  protected async canSendResponseCopy(_context: NcContext): Promise<boolean> {
+    return false;
+  }
+
+  onModuleInit(): any {
+    this.unsubscribe = this.eventEmitter.on(HANDLE_WEBHOOK, async (arg) => {
+      try {
+        const { context, ...rest } = arg;
+        return this.handleHooks(
+          { ...context, cache: false, cacheMap: undefined },
+          rest,
+        );
+      } catch (e) {
+        this.logger.error({
+          error: e,
+          details: 'Error while handle webook on HookHandlerService',
+        });
+      }
+    });
+  }
+
+  onModuleDestroy() {
+    this.unsubscribe?.();
+  }
+}

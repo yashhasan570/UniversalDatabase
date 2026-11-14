@@ -1,0 +1,91 @@
+# Universal Database Quickstart: local evaluation on Mac, Windows, or Linux.
+#
+#   docker compose up -d      then open http://localhost:8080
+#
+# This stack is for trying Universal Database locally. For a production install with HTTPS,
+# automatic SSL, and hardening, use the installer instead:
+#
+#   bash <(curl -sSL https://install.universaldatabase.com/universaldatabase.sh)
+
+services:
+
+  universaldatabase:
+    image: universaldatabase/universaldatabase:latest
+    environment:
+      NC_DB: 'pg://db:5432?u=universaldatabase&p=universaldatabase&d=universaldatabase'
+      NC_REDIS_URL: 'redis://redis:6379'
+      NC_SITE_URL: 'http://localhost:8080'
+      NC_DISABLE_MUX: 'true'
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - universaldatabase_data:/usr/app/data
+    networks:
+      - universaldatabase-network
+    ports:
+      - '8080:8080'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --tries=1 --spider http://localhost:8080/api/v1/health || exit 1']
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  worker:
+    image: universaldatabase/universaldatabase:latest
+    environment:
+      NC_DB: 'pg://db:5432?u=universaldatabase&p=universaldatabase&d=universaldatabase'
+      NC_REDIS_URL: 'redis://redis:6379'
+      NC_SITE_URL: 'http://localhost:8080'
+      NC_WORKER_CONTAINER: 'true'
+    depends_on:
+      universaldatabase:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - universaldatabase_data:/usr/app/data
+    networks:
+      - universaldatabase-network
+
+  db:
+    image: postgres:17.10
+    environment:
+      POSTGRES_USER: universaldatabase
+      POSTGRES_PASSWORD: universaldatabase
+      POSTGRES_DB: universaldatabase
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U universaldatabase -d universaldatabase']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - universaldatabase-network
+
+  redis:
+    image: redis:7
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - universaldatabase-network
+
+networks:
+  universaldatabase-network:
+    driver: bridge
+
+volumes:
+  universaldatabase_data:
+  postgres_data:
+  redis_data:

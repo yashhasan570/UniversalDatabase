@@ -1,0 +1,32 @@
+{
+  "name": "nc-lib-gui",
+  "version": "0.301.3",
+  "description": "Universal Database GUI",
+  "author": {
+    "name": "universal-database",
+    "url": "https://universaldatabase.com/"
+  },
+  "homepage": "https://github.com/universaldatabase/universaldatabase",
+  "license": "Sustainable Use License",
+  "main": "lib/XcLibGui.js",
+  "directories": {
+    "lib": "lib",
+    "test": "__tests__"
+  },
+  "files": [
+    "lib"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com:universaldatabase/universaldatabase.git"
+  },
+  "scripts": {
+    "test": "echo \"Error: run tests from root\" && exit 1"
+  },
+  "bugs": {
+    "url": "https://github.com/universaldatabase/universaldatabase/issues"
+  },
+  "dependencies": {
+    "express": "^4.17.1"
+  }
+}

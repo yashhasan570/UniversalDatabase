@@ -1,0 +1,377 @@
+import dns from 'dns';
+import * as net from 'net';
+import ipaddr from 'ipaddr.js';
+import parseKnexConnection from 'knex/lib/knex-builder/internal/parse-connection';
+import type { LookupAddress } from 'dns';
+
+/**
+ * SSRF protection for outbound database connections.
+ *
+ * Validates the resolved IP of an external DB host AT CONNECT TIME, inside the
+ * driver's socket setup, rather than only at save time. This closes the TOCTOU
+ * window where a short-TTL DNS record could pass a pre-flight check and then
+ * flip to a private/internal address before the driver actually connects.
+ *
+ * Wired in via knex's per-driver `connection.stream` factory (pg + mysql/mysql2)
+ * and tedious's `options.connector` (mssql) — see {@link applyDbSsrfProtection}.
+ * The factory never rewrites `host`, so the driver's TLS servername /
+ * certificate verification is unaffected.
+ *
+ * NOTE: keep this file free of app-internal imports — it is copied verbatim into
+ * packages/nc-sql-executor (a separate deployable that cannot import from
+ * universaldatabase). Any change here must be mirrored there.
+ */
+
+// ipaddr.js range() values treated as non-routable / internal.
+const BLOCKED_RANGES = new Set<string>([
+  'private',
+  'loopback',
+  'linkLocal', // incl. 169.254.0.0/16 cloud-metadata
+  'uniqueLocal',
+  'reserved',
+  'unspecified',
+  'broadcast',
+  'carrierGradeNat',
+  // IPv6 transition prefixes with no cleanly-decodable embedded IPv4 here —
+  // never a legitimate external DB host, so block the prefix wholesale.
+  'teredo', // RFC 4380, 2001::/32
+  'rfc6145', // ::ffff:0:0:0/96 (stateless IP/ICMP translation)
+]);
+
+// RFC 8215 local-use NAT64. ipaddr.js reports it as plain `unicast`, and RFC 6052
+// puts the embedded IPv4 at a different offset for every prefix length ≥ /48, so
+// block the /48 outright rather than guessing which one is in use.
+const NAT64_LOCAL_USE = ipaddr.parseCIDR('64:ff9b:1::/48') as [
+  ipaddr.IPv6,
+  number,
+];
+
+/**
+ * Normalise IPv6 forms that embed an IPv4 so the IPv4 blocklist catches an
+ * internal target wrapped in an IPv6 transition encoding (CWE-918).
+ */
+function normaliseEmbeddedIpv4(parsed: ipaddr.IPv4 | ipaddr.IPv6) {
+  if (parsed.kind() !== 'ipv6') return parsed;
+
+  const v6 = parsed as ipaddr.IPv6;
+  if (v6.isIPv4MappedAddress()) {
+    return v6.toIPv4Address(); // ::ffff:a.b.c.d
+  }
+  const b = v6.toByteArray();
+  if (v6.range() === '6to4') {
+    // 2002:WWXX:YYZZ::/16 — embedded IPv4 in bytes 2..5 (RFC 3056).
+    return new ipaddr.IPv4([b[2], b[3], b[4], b[5]]);
+  }
+  if (v6.range() === 'rfc6052') {
+    // NAT64 well-known prefix 64:ff9b::/96 — embedded IPv4 in bytes 12..15.
+    return new ipaddr.IPv4([b[12], b[13], b[14], b[15]]);
+  }
+  // RFC 4291 IPv4-compatible ::a.b.c.d. ipaddr.js only reports `ipv4Mapped` for
+  // the spellings it rewrites to ::ffff:; `0::127.0.0.1` stays `unicast`.
+  if (b.slice(0, 12).every((byte) => byte === 0)) {
+    return new ipaddr.IPv4([b[12], b[13], b[14], b[15]]);
+  }
+  return v6;
+}
+
+/** True if a string IP resolves into a blocked (internal / non-routable) range. */
+export function isBlockedIp(addr: string): boolean {
+  if (!ipaddr.isValid(addr)) {
+    // Node accepts IPv6 spellings ipaddr.js rejects (dotted-quad tails behind a
+    // multi-group prefix, on ipaddr.js < 2.2). Returning false would mean
+    // allowing, and a routable host always parses — so fail closed.
+    return net.isIP(addr) !== 0;
+  }
+  const parsed = ipaddr.parse(addr);
+
+  if (BLOCKED_RANGES.has(parsed.range())) return true;
+  if (
+    parsed.kind() === 'ipv6' &&
+    (parsed as ipaddr.IPv6).match(NAT64_LOCAL_USE)
+  )
+    return true;
+
+  return BLOCKED_RANGES.has(normaliseEmbeddedIpv4(parsed).range());
+}
+
+function blockedError(): NodeJS.ErrnoException {
+  return Object.assign(
+    new Error('Connection to internal hosts is not allowed'),
+    {
+      code: 'EACCES',
+    },
+  );
+}
+
+/**
+ * Drop-in replacement for dns.lookup that rejects any resolution landing in a
+ * blocked range. Handles Happy-Eyeballs (`options.all === true` → array) and the
+ * single-address form. Fails closed: if ANY returned address is blocked, the
+ * whole lookup errors.
+ */
+export const validatingLookup: net.LookupFunction = (
+  hostname,
+  options,
+  callback,
+) => {
+  dns.lookup(hostname, options, (err, address, family) => {
+    if (err) return callback(err, address, family);
+
+    const records: LookupAddress[] = Array.isArray(address)
+      ? address
+      : [{ address, family: family ?? 0 }];
+
+    for (const rec of records) {
+      if (isBlockedIp(rec.address)) {
+        console.warn(
+          `[ssrf] blocked DB connection: ${hostname} resolved to internal ${rec.address}`,
+        );
+        return callback(blockedError(), '', 0);
+      }
+    }
+
+    callback(null, address, family);
+  });
+};
+
+/** A net.Socket that fails on next tick — used to refuse blocked IP literals. */
+function refusingSocket(): net.Socket {
+  const socket = new net.Socket();
+  process.nextTick(() => socket.destroy(blockedError()));
+  return socket;
+}
+
+/**
+ * pg factory: returns a FRESH socket; pg later calls `stream.connect(port, host)`
+ * positionally (node_modules/pg/lib/connection.js). We override connect to route
+ * through net.Socket's options form so the validating lookup can be injected.
+ */
+function pgStreamFactory(): () => net.Socket {
+  return () => {
+    const socket = new net.Socket();
+    const originalConnect = socket.connect.bind(socket);
+
+    socket.connect = ((...args: unknown[]): net.Socket => {
+      const first = args[0];
+
+      // pg dials a unix socket as `connect(path)`.
+      if (typeof first === 'string' && first.startsWith('/')) {
+        console.warn(`[ssrf] blocked DB connection: unix socket ${first}`);
+        process.nextTick(() => socket.destroy(blockedError()));
+        return socket;
+      }
+      const opts: net.TcpSocketConnectOpts =
+        typeof first === 'object' && first !== null
+          ? { ...(first as net.TcpSocketConnectOpts) }
+          : { port: first as number, host: args[1] as string };
+
+      // IP literals skip dns.lookup entirely → validate them directly.
+      if (
+        typeof opts.host === 'string' &&
+        net.isIP(opts.host) &&
+        isBlockedIp(opts.host)
+      ) {
+        console.warn(
+          `[ssrf] blocked DB connection: internal IP literal ${opts.host}`,
+        );
+        process.nextTick(() => socket.destroy(blockedError()));
+        return socket;
+      }
+
+      opts.lookup = validatingLookup;
+      return originalConnect(opts);
+    }) as typeof socket.connect;
+
+    return socket;
+  };
+}
+
+interface Mysql2StreamOpts {
+  config: {
+    host?: string;
+    port?: number;
+    socketPath?: string;
+    enableKeepAlive?: boolean;
+    keepAliveInitialDelay?: number;
+  };
+}
+
+/**
+ * mysql / mysql2 factory: must return an ALREADY-CONNECTING socket — mysql2 never
+ * calls `.connect()` on a supplied stream
+ * (node_modules/mysql2/lib/base/connection.js).
+ */
+function mysql2StreamFactory(): (opts: Mysql2StreamOpts) => net.Socket {
+  return (opts) => {
+    const cfg = opts.config;
+
+    if (cfg.socketPath) {
+      console.warn(
+        `[ssrf] blocked DB connection: unix socket ${cfg.socketPath}`,
+      );
+      return refusingSocket();
+    }
+
+    if (
+      typeof cfg.host === 'string' &&
+      net.isIP(cfg.host) &&
+      isBlockedIp(cfg.host)
+    ) {
+      console.warn(
+        `[ssrf] blocked DB connection: internal IP literal ${cfg.host}`,
+      );
+      return refusingSocket();
+    }
+
+    const socket = net.connect({
+      port: cfg.port ?? 3306,
+      host: cfg.host,
+      lookup: validatingLookup,
+    });
+    socket.setNoDelay(true); // replicate mysql2's own socket tuning (skipped for custom streams)
+    if (cfg.enableKeepAlive) {
+      socket.on('connect', () =>
+        socket.setKeepAlive(true, cfg.keepAliveInitialDelay),
+      );
+    }
+    return socket;
+  };
+}
+
+interface TediousConnectOpts {
+  host: string;
+  port: number;
+  localAddress?: string;
+}
+
+/**
+ * mssql (tedious) connector: replaces tedious's own socket setup, so the address
+ * it dials — including an Azure SQL redirect target — is range-checked.
+ */
+function tediousConnector(): (
+  opts: TediousConnectOpts,
+  lookup: unknown,
+  signal?: AbortSignal,
+) => Promise<net.Socket> {
+  return (opts, _lookup, signal) =>
+    new Promise((resolve, reject) => {
+      if (net.isIP(opts.host) && isBlockedIp(opts.host)) {
+        console.warn(
+          `[ssrf] blocked DB connection: internal IP literal ${opts.host}`,
+        );
+        return reject(blockedError());
+      }
+      if (signal?.aborted) return reject(signal.reason);
+
+      const socket = net.connect({
+        host: opts.host,
+        port: opts.port,
+        localAddress: opts.localAddress,
+        lookup: validatingLookup,
+      });
+
+      const cleanup = () => {
+        signal?.removeEventListener('abort', onAbort);
+        socket.removeListener('error', onError);
+        socket.removeListener('connect', onConnect);
+      };
+      const onAbort = () => {
+        cleanup();
+        socket.destroy();
+        reject(signal?.reason);
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        socket.destroy();
+        reject(err);
+      };
+      const onConnect = () => {
+        cleanup();
+        resolve(socket);
+      };
+
+      signal?.addEventListener('abort', onAbort, { once: true });
+      socket.once('error', onError);
+      socket.once('connect', onConnect);
+    });
+}
+
+// Every knex client name that loads the pg driver.
+const PG_CLIENTS = new Set([
+  'pg',
+  'postgres',
+  'postgresql',
+  'pg-native',
+  'redshift',
+  'cockroachdb',
+]);
+
+function isPgClient(client: unknown): boolean {
+  return typeof client === 'string' && PG_CLIENTS.has(client);
+}
+
+/** Returns the stream factory for a knex client, or undefined if unsupported. */
+function ssrfStreamFactoryFor(client: unknown): unknown {
+  if (isPgClient(client)) return pgStreamFactory();
+  switch (client) {
+    case 'mysql':
+    case 'mysql2':
+      return mysql2StreamFactory();
+    default:
+      // sqlite (no network); mssql (see tediousConnector); oracledb /
+      // snowflake / databricks (no socket hook).
+      return undefined;
+  }
+}
+
+/** `'mssql'`, or a knex dialect class for it (e.g. `knex-mssql`'s MssqlClient). */
+function isMssqlClient(client: unknown): boolean {
+  if (client === 'mssql') return true;
+  if (typeof client !== 'function') return false;
+  const proto = (client as { prototype?: Record<string, unknown> }).prototype;
+  return proto?.dialect === 'mssql' || proto?.driverName === 'mssql';
+}
+
+/**
+ * Inject the validating stream factory (or tedious connector) into a knex
+ * config's `connection`. A pg DSN is wrapped as `{ connectionString }`; others parse as knex would.
+ * No-op when disabled, for unsupported clients, or when a stream factory is
+ * already present.
+ */
+export function applyDbSsrfProtection<
+  T extends { client?: unknown; connection?: unknown },
+>(config: T, enabled: boolean): T {
+  if (!enabled || !config || typeof config !== 'object') return config;
+
+  if (typeof config.connection === 'string') {
+    if (isPgClient(config.client)) {
+      // pg-connection-string reads sslrootcert/sslcert/sslkey from disk; leave
+      // that to the pg client constructor, inside the caller's error handling.
+      config.connection = { connectionString: config.connection };
+    } else if (
+      isMssqlClient(config.client) ||
+      ssrfStreamFactoryFor(config.client)
+    ) {
+      config.connection = parseKnexConnection(config.connection).connection;
+    }
+  }
+
+  const connection = config.connection;
+  if (!connection || typeof connection !== 'object') return config;
+
+  if (isMssqlClient(config.client)) {
+    const conn = connection as { options?: { connector?: unknown } };
+    if (typeof conn.options?.connector !== 'function') {
+      conn.options = { ...conn.options, connector: tediousConnector() };
+    }
+    return config;
+  }
+
+  const conn = connection as { stream?: unknown };
+  if (conn.stream) return config; // respect an explicitly supplied factory
+
+  const stream = ssrfStreamFactoryFor(config.client);
+  if (stream) conn.stream = stream;
+
+  return config;
+}

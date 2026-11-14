@@ -1,0 +1,195 @@
+<script setup lang="ts">
+import ErrorBoundary from './components/nc/ErrorBoundary.vue'
+
+const router = useRouter()
+
+useUpdateChecker()
+
+const route = router.currentRoute
+
+// Shared/public pages route external link clicks through the /leaving interstitial.
+watch(
+  () =>
+    isSharedBaseOrErdOrViewRoute(route.value) ||
+    isSharedDashboardRoute(route.value) ||
+    isSharedInterfaceRoute(route.value) ||
+    // Ambient embed is the builder preview on the user's own session, framed by the console.
+    (isInterfaceEmbedRoute(route.value) && route.value.query.ambient !== '1'),
+  (isShared) => addConfirmPageLeavingRedirectToWindow(!isShared),
+  { immediate: true },
+)
+
+const { showOnboardingFlow } = useOnboardingFlow()
+
+const { hideSharedBaseBtn } = storeToRefs(useConfigStore())
+
+const disableBaseLayout = computed(
+  () => route.value.path.startsWith('/nc/view') || route.value.path.startsWith('/nc/form') || showOnboardingFlow.value,
+)
+
+const { isExperimentalFeatureModalOpen, initializeFeatures } = useBetaFeatureToggle()
+
+initializeFeatures()
+
+useAntDvTheme()
+
+useBrandingApply()
+
+const { isRtl } = useRtl()
+
+const antDirection = computed(() => (isRtl.value ? 'rtl' : 'ltr'))
+
+const { commandPalette } = useCommandPalette()
+
+const { cmdK, cmdL, cmdJ, setActiveCmdView } = useCommand()
+
+const { user } = useGlobal()
+
+useUserSync()
+
+useRealtime()
+
+useUndoRedo()
+
+applyNonSelectable()
+
+const { chatwootInit } = useProvideChatwoot()
+
+onMounted(() => {
+  window.addEventListener('chatwoot:ready', chatwootInit)
+
+  if (route.value.query.hideSharedBaseBtn === 'true') {
+    hideSharedBaseBtn.value = true
+  }
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('chatwoot:ready', chatwootInit)
+})
+
+// Capture phase: editors such as Monaco (scripts) bind Cmd+K/L/J and stop them bubbling.
+// Propagation is left alone so editors that use the keys still see them. An open Cmd+L
+// cycles on its own Cmd+L, so only opening happens here.
+useEventListener(
+  document,
+  'keydown',
+  (e: KeyboardEvent) => {
+    const cmdOrCtrl = isMac() ? e.metaKey : e.ctrlKey
+    if (!cmdOrCtrl || e.altKey || !user.value) return
+
+    const key = e.key.toLowerCase()
+    if (key === 'k' && !e.shiftKey) {
+      e.preventDefault()
+      setActiveCmdView('cmd-k')
+    } else if (key === 'l' && !cmdL.value) {
+      e.preventDefault()
+      setActiveCmdView('cmd-l')
+    } else if (key === 'j' && !e.shiftKey) {
+      // Rich-text editors bind Mod-J to insert a link; ProseMirror ignores default-prevented keys.
+      if (e.target instanceof Element && e.target.closest('.ProseMirror')) return
+      e.preventDefault()
+      if (cmdJ.value) cmdJ.value = false
+      else setActiveCmdView('cmd-j')
+    }
+  },
+  { capture: true },
+)
+
+useEventListener(document, 'keydown', async (e: KeyboardEvent) => {
+  const cmdOrCtrl = isMac() ? e.metaKey : e.ctrlKey
+  if (cmdOrCtrl) {
+    switch (e.key.toLowerCase()) {
+      case 'a':
+        // prevent Ctrl + A selection for non-editable nodes
+        if (!['input', 'textarea'].includes((e.target as any).nodeName.toLowerCase())) {
+          e.preventDefault()
+        }
+        break
+      case 'l':
+        e.preventDefault()
+        break
+      case 'j':
+        e.preventDefault()
+        break
+    }
+  }
+})
+
+// TODO: Remove when https://github.com/vuejs/core/issues/5513 fixed
+const key = ref(0)
+
+const messages = [
+  `Uncaught NotFoundError: Failed to execute 'insertBefore' on 'Node': The node before which the new node is to be inserted is not a child of this node.`, // chromium based
+  `NotFoundError: The object can not be found here.`, // safari
+  "Cannot read properties of null (reading 'parentNode')",
+]
+
+if (typeof window !== 'undefined') {
+  // @ts-expect-error using arbitrary window key
+  if (!window.__ncvue) {
+    window.addEventListener('error', (event) => {
+      if (messages.includes(event.message)) {
+        event.preventDefault()
+        console.warn('Re-rendering layout because of https://github.com/vuejs/core/issues/5513')
+        key.value++
+      }
+    })
+  }
+
+  // @ts-expect-error using arbitrary window key
+  window.__ncvue = true
+}
+
+// ref: https://github.com/vuejs/vue-cli/issues/7431#issuecomment-1793385162
+// Stop error resizeObserver
+const debounce = (callback: (...args: any[]) => void, delay: number) => {
+  let tid: any
+  return function (...args: any[]) {
+    const ctx = self
+    tid && clearTimeout(tid)
+    tid = setTimeout(() => {
+      callback.apply(ctx, args)
+    }, delay)
+  }
+}
+
+const _ = (window as any).ResizeObserver
+;(window as any).ResizeObserver = class ResizeObserver extends _ {
+  constructor(callback: (...args: any[]) => void) {
+    callback = debounce(callback, 20)
+    super(callback)
+  }
+}
+</script>
+
+<template>
+  <a-config-provider :direction="antDirection">
+    <NuxtLayout :name="disableBaseLayout ? false : 'base'">
+      <ErrorBoundary>
+        <NuxtPage :key="key" :transition="false" />
+      </ErrorBoundary>
+    </NuxtLayout>
+  </a-config-provider>
+
+  <ErrorBoundary>
+    <div>
+      <!-- Page Loading Indicator -->
+      <NcNuxtLoadingIndicator />
+
+      <!-- Command Menu. Keyed by user: sign-out disposes the Pinia stores these hold, so a new user remounts them. -->
+      <CmdK :key="user?.id" ref="commandPalette" v-model:open="cmdK" :set-active-cmd-view="setActiveCmdView" />
+      <!-- Recent Views. Cycles through recently visited Views -->
+      <CmdL :key="user?.id" v-model:open="cmdL" :set-active-cmd-view="setActiveCmdView" />
+      <!-- Documentation. Integrated Universal Database Docs directly inside the Product -->
+      <CmdJ v-model:open="cmdJ" :set-active-cmd-view="setActiveCmdView" />
+      <DashboardFeatureExperimentation v-model:value="isExperimentalFeatureModalOpen" />
+    </div>
+  </ErrorBoundary>
+
+  <LazyDashboardThemeConfig />
+  <LazyChatPanel />
+  <LazyChatFab />
+  <LazyTourHost />
+  <!-- `?mcp` opens the AI setup dialog over any page (EE). -->
+  <LazyConnectAiHost />
+</template>

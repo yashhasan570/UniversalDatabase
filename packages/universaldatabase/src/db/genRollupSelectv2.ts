@@ -1,0 +1,751 @@
+import {
+  FormulaDataTypes,
+  getAvailableRollupForUiType,
+  getRollupResultUidt,
+  isBtLikeV2Junction,
+  isMMOrMMLike,
+  isNumericCol,
+  isRollupAggregatableColumn,
+  isRollupFormula,
+  isRollupFormulaTargetColumn,
+  NC_ERROR_SENTINEL,
+  NcErrorType,
+  RelationTypes,
+  UITypes,
+} from 'universaldatabase-sdk';
+import { CircularRefContext } from 'universaldatabase-sdk';
+import type { ClientType } from 'universaldatabase-sdk';
+import type { IBaseModelSqlV2 } from './IBaseModelSqlV2';
+import type { Knex } from 'knex';
+import type {
+  ButtonColumn,
+  FormulaColumn,
+  LinksColumn,
+  LinkToAnotherRecordColumn,
+  LookupColumn,
+  RollupColumn,
+} from '~/models';
+import type { XKnex } from '~/db/CustomKnex';
+import { healRollupDataError } from '~/db/rollupReadFallback';
+import { NcError } from '~/helpers/ncError';
+import { NcBaseErrorv2 } from '~/helpers/catchError';
+import { RelationManager } from '~/db/relation-manager';
+import { Column, Model } from '~/models';
+import formulaQueryBuilderv2 from '~/db/formulav2/formulaQueryBuilderv2';
+import genRollupFormulaSelect from '~/db/genRollupFormulaSelect';
+import { excludeNonFiniteSql, isPgIeeeEnabled } from '~/db/formulav2/pg-ieee';
+import {
+  applyRelatedRls,
+  extractLinkRelFiltersAndApply,
+} from '~/db/conditionV2';
+import { getAliasedSoftDeleteFilter } from '~/helpers/dbHelpers';
+import { readsHiddenTable } from '~/helpers/tableHelpers';
+import { Profiler } from '~/helpers/profiler';
+import { DBQueryClient } from '~/dbQueryClient';
+import {
+  escapeBindingPlaceholders,
+  rawFromBuilder,
+} from '~/helpers/sqlSanitize';
+
+// Numeric rollups a non-finite value would poison. `count`/`countDistinct` are
+// deliberately absent — they must keep seeing every row.
+const NON_FINITE_EXCLUDING_ROLLUPS = [
+  'sum',
+  'sumDistinct',
+  'avg',
+  'avgDistinct',
+  'min',
+  'max',
+];
+
+// Ceiling on rollup-of-rollup expansion — a chain of *distinct* rollups repeats
+// no column id, so CircularRefContext never fires and the correlated subqueries
+// nest without limit. Real chains are 1–3 deep; 16 is generous.
+//
+// Partial: `nestedLevel` lives only in this file, so a Rollup → Formula → Rollup
+// hop re-enters at 0 and evades the cap. Closing that means threading the depth
+// through formulaQueryBuilderv2.
+const MAX_ROLLUP_NESTED_LEVEL = 16;
+
+export default async function genRollupSelectv2(param: {
+  baseModelSqlv2: IBaseModelSqlV2;
+  knex: XKnex;
+  alias?: string;
+  columnOptions: RollupColumn | LinksColumn;
+  parentColumns?: CircularRefContext;
+  nestedLevel?: number;
+  // saving a formula rollup reports its errors; reads show the cell as an error
+  throwOnFormulaError?: boolean;
+}): Promise<{ builder: Knex.QueryBuilder; isError?: boolean }> {
+  const { baseModelSqlv2, knex, alias, columnOptions, nestedLevel = 0 } = param;
+  let { parentColumns } = param;
+
+  // Callers treat the result as a query builder — `select-object` and `group-by`
+  // call `.as()` on it, which knex 3's `Raw` doesn't implement. Oracle is the
+  // one dialect that rejects a SELECT without a FROM.
+  const errorSentinel = () => {
+    const qb = knex.select(knex.raw(`?`, [NC_ERROR_SENTINEL]));
+    return {
+      builder: baseModelSqlv2.isOracle ? qb.from(knex.raw('dual')) : qb,
+      isError: true,
+    };
+  };
+
+  if (columnOptions.error) {
+    if ('data_error' in columnOptions) {
+      healRollupDataError(baseModelSqlv2, columnOptions);
+    }
+    return errorSentinel();
+  }
+
+  const context = baseModelSqlv2.context;
+
+  if (nestedLevel > MAX_ROLLUP_NESTED_LEVEL) {
+    NcError.get(context).badRequest(
+      `Rollup nesting is too deep (> ${MAX_ROLLUP_NESTED_LEVEL}). Simplify the dependent rollup chain.`,
+    );
+  }
+
+  parentColumns = parentColumns ?? CircularRefContext.make();
+  const profiler = Profiler.start(
+    'DEBUG:/genRollupSelectv2/' + columnOptions.fk_column_id,
+  );
+  const column = await Column.get(context, {
+    colId: columnOptions.fk_column_id,
+  });
+  if (column) {
+    const model = await Model.getByAliasOrId(context, {
+      base_id: context.base_id,
+      aliasOrId: column.fk_model_id,
+    });
+    parentColumns = parentColumns.cloneAndAdd({
+      id: column.id,
+      title: column.title,
+      table: model?.title,
+    });
+  }
+  profiler.log('cloneAndAdd done');
+
+  if (column && (await readsHiddenTable(context, column))) {
+    const qb = knex.select(knex.raw('NULL'));
+    return {
+      builder: baseModelSqlv2.isOracle ? qb.from(knex.raw('dual')) : qb,
+    };
+  }
+  let relationColumn: Column;
+  if (!columnOptions.getRelationColumn) {
+    relationColumn = await Column.get(context, {
+      colId: columnOptions.fk_relation_column_id,
+    });
+  } else {
+    relationColumn = await columnOptions.getRelationColumn();
+  }
+  profiler.log('getRelationColumn done');
+
+  if (!relationColumn) {
+    return errorSentinel();
+  }
+
+  const relationColumnOption: LinkToAnotherRecordColumn =
+    (await relationColumn.getColOptions()) as LinkToAnotherRecordColumn;
+  const { parentContext, childContext, mmContext, refContext } =
+    await relationColumnOption.getParentChildContext();
+
+  const isMMLike = isMMOrMMLike(relationColumn);
+
+  const rollupColumn = columnOptions.getRollupColumn
+    ? await columnOptions.getRollupColumn()
+    : await Column.get(refContext, {
+        colId: columnOptions.fk_rollup_column_id,
+      });
+  profiler.log('get relation (parent/child) columns');
+
+  if (!rollupColumn) {
+    NcError.get(context).fieldNotFound(columnOptions.fk_rollup_column_id);
+  }
+
+  // No column to aggregate: the fallthrough in `applyFunction` would bind a null
+  // `column_name` and fail the whole read, not just this cell. Signal only —
+  // `colOptions.error` means "dependency deleted" (cleared on restore), so this
+  // partial check must never write to it.
+  if (
+    isRollupFormula(columnOptions)
+      ? !isRollupFormulaTargetColumn(rollupColumn)
+      : !isRollupAggregatableColumn(rollupColumn)
+  ) {
+    return errorSentinel();
+  }
+
+  // an errored rollup / lookup target reads as the error sentinel text, which
+  // a SUM / filter can't take: the whole read would fail, not this cell
+  if ([UITypes.Rollup, UITypes.Lookup].includes(rollupColumn.uidt)) {
+    const targetOptions = await rollupColumn.getColOptions<
+      RollupColumn | LookupColumn
+    >();
+    if (targetOptions?.error) {
+      if ('data_error' in targetOptions) {
+        healRollupDataError(baseModelSqlv2, targetOptions);
+      }
+      return errorSentinel();
+    }
+  }
+
+  const childCol = await relationColumnOption.getChildColumn();
+  const childModel = await childCol?.getModel();
+  const parentCol = await relationColumnOption.getParentColumn();
+  const parentModel = await parentCol?.getModel();
+  const refTableAlias =
+    `__nc_rollup_` + Math.random().toString(36).substring(2, 8);
+
+  const dbQueryClient = DBQueryClient.get(knex.clientType() as ClientType);
+  profiler.log('get base model');
+
+  const parentBaseModel = await Model.getBaseModelSQL(parentContext, {
+    model: parentModel,
+    dbDriver: knex,
+  });
+  const childBaseModel = await Model.getBaseModelSQL(childContext, {
+    model: childModel,
+    dbDriver: knex,
+  });
+
+  const refBaseModel =
+    rollupColumn.fk_model_id === childModel.id
+      ? childBaseModel
+      : parentBaseModel;
+
+  // MSSQL rejects `agg(subquery)` ("Cannot perform an aggregate function on
+  // an expression containing an aggregate or a subquery"). When the rolled-up
+  // column lowers to a correlated subquery (nested Rollup / Formula /
+  // Created-Modified), defer the aggregate to a derived-table wrap in
+  // `wrapMssqlNestedAgg` below.
+  const NC_ROLLUP_VAL_ALIAS = '__nc_rollup_val';
+  let selectColumnIsSubquery = false;
+
+  const applyFunction = async (qb: any) => {
+    profiler.log('applyFunction ' + rollupColumn.uidt);
+    // Row count of the linked records — the target value is never read.
+    if (columnOptions.rollup_function === 'countAll') {
+      qb.count('*');
+      profiler.log('applyFunction done');
+      return;
+    }
+    let selectColumnName = knex.raw('??.??', [
+      refTableAlias,
+      rollupColumn.column_name,
+    ]);
+    // Tracks whether the resolved value is boolean-typed even though
+    // `rollupColumn.dt` doesn't say so — true for a boolean-returning Formula
+    // subquery (virtual column, so `dt` is null). Drives the MSSQL bit→FLOAT
+    // cast below, which would otherwise only fire for direct `bit` columns.
+    let selectValueIsBoolean = false;
+    // Tracks whether the resolved value is a string-typed Formula. On Oracle a
+    // string Formula lowers to a CLOB (CONCAT wraps args in TO_CLOB to dodge the
+    // VARCHAR2 4000-byte concat cap), and CLOB is rejected by COUNT / COUNT
+    // DISTINCT / MIN / MAX (ORA-22849). Drives the CLOB→VARCHAR2 normalization
+    // below.
+    let selectValueIsString = false;
+    if (rollupColumn.uidt === UITypes.Formula) {
+      // `rollupColumn` lives in the related table — for a cross-base rollup its
+      // column options (the formula AST) are stored under the related base, so
+      // they must be read with `refContext`, not the current base's `context`.
+      // Reading with the wrong context returns null and crashes on
+      // `formulOption.formula` below. Matches the rollup-of-rollup branch, which
+      // already resolves its colOptions via `refContext`.
+      const formulOption = await rollupColumn.getColOptions<
+        FormulaColumn | ButtonColumn
+      >();
+
+      if (!formulOption) {
+        NcError.get(context).fieldNotFound(columnOptions.fk_rollup_column_id);
+      }
+
+      const formulaQb = await formulaQueryBuilderv2({
+        baseModel: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentBaseModel
+          : childBaseModel,
+        tree: formulOption.formula,
+        model: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentModel
+          : childModel,
+        column: rollupColumn,
+        aliasToColumn: {},
+        tableAlias: refTableAlias,
+        validateFormula: false,
+        parsedTree: formulOption.getParsedTree(),
+        baseUsers: undefined,
+        parentColumns,
+      });
+      // `formulaQb.builder` already escapes its `?` literals (`\\?`) so knex
+      // doesn't bind them. But `knex.raw(rawObj)` resolves the inner Raw via
+      // `toQuery()` first, which STRIPS the `\\` and re-exposes a bare `?` —
+      // that `?` then collides with downstream WHERE bindings (e.g. the
+      // soft-delete `__nc_deleted = false`), swapping arguments and leaving
+      // an unbound `?` that PG rejects as a syntax error. Materialize the
+      // SQL and re-escape `?` so the outer builder treats it as literal.
+      // See: parsed-tree-builder.ts:307 (where the original `\\?` escape
+      // is applied to formula output).
+      selectColumnIsSubquery = true;
+      const resolvedFormulaSql = `(${escapeBindingPlaceholders(
+        formulaQb.builder.toQuery(),
+      )})`;
+      // A rollup is the second numeric-aggregate consumer of a pg formula, and
+      // the only one that doesn't route through applyAggregation — so it needs
+      // the same exclusion at its own site. Otherwise a single non-finite row
+      // takes the whole aggregate (NaN poisons sum/avg/max; -Infinity wins min),
+      // and since the value lands on a Rollup column rather than a Formula one,
+      // convertFormulaNonFinite skips it and JSON.stringify blanks it to null —
+      // a wrong value that reads as no value. The count family is deliberately
+      // excluded: an Infinity cell is not an empty cell.
+      // Composed as SQL text, not a nested knex.raw bind — see the `\\?` note
+      // above; re-binding this Raw would strip the escape.
+      selectColumnName = knex.raw(
+        isPgIeeeEnabled(knex) &&
+          formulOption.getParsedTree()?.dataType === FormulaDataTypes.NUMERIC &&
+          NON_FINITE_EXCLUDING_ROLLUPS.includes(
+            columnOptions.rollup_function as string,
+          )
+          ? excludeNonFiniteSql(resolvedFormulaSql)
+          : resolvedFormulaSql,
+      );
+      // A boolean-returning formula (e.g. a Checkbox passthrough) lowers to a
+      // `bit`-typed expression on MSSQL — flag it so the bit→FLOAT cast fires.
+      selectValueIsBoolean =
+        formulOption.getParsedTree()?.dataType === FormulaDataTypes.BOOLEAN;
+      selectValueIsString =
+        formulOption.getParsedTree()?.dataType === FormulaDataTypes.STRING;
+    } else if ([UITypes.Rollup].includes(rollupColumn.uidt)) {
+      const knex = refBaseModel.dbDriver;
+
+      // Rollup-of-rollup: compute inner rollup correlated to the current level
+      const inner = await genRollupSelectv2({
+        baseModelSqlv2: refBaseModel,
+        knex,
+        alias: refTableAlias,
+        columnOptions: await rollupColumn.getColOptions<RollupColumn>(),
+        nestedLevel: nestedLevel + 1,
+        parentColumns,
+      });
+
+      // Use the inner builder directly as a subquery
+      selectColumnIsSubquery = true;
+      selectColumnName = knex.raw('(?)', [inner.builder]);
+    } else if (
+      [
+        UITypes.CreatedTime,
+        UITypes.CreatedBy,
+        UITypes.LastModifiedTime,
+        UITypes.LastModifiedBy,
+      ].includes(rollupColumn.uidt)
+    ) {
+      // since all field are virtual field,
+      // we use formula to generate query that can represent the column
+      // to prevent duplicate logic
+      const formulaQb = await formulaQueryBuilderv2({
+        baseModel: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentBaseModel
+          : childBaseModel,
+        tree: '{{' + rollupColumn.id + '}}',
+        model: RelationManager.isRelationReversed(
+          relationColumn,
+          relationColumnOption,
+        )
+          ? parentModel
+          : childModel,
+        column: rollupColumn,
+        tableAlias: refTableAlias,
+        parsedTree: {
+          type: 'Identifier',
+          name: rollupColumn.id,
+          raw: '{{' + rollupColumn.id + '}}',
+          dataType: [UITypes.CreatedTime, UITypes.LastModifiedTime].includes(
+            rollupColumn.uidt,
+          )
+            ? 'date'
+            : 'string',
+        },
+      });
+
+      // Same `\\?` re-escape as the Formula branch above — Created/Modified
+      // metadata columns lower into a formula builder too, so they share the
+      // same `?`-binding hazard when wrapped via `knex.raw(rawObj)`.
+      selectColumnIsSubquery = true;
+      selectColumnName = rawFromBuilder(
+        knex,
+        `(${formulaQb.builder.toQuery()})`,
+      );
+    }
+
+    // if postgres and rollup function is sum/sumDistinct/avgDistinct/avg, then cast the column to integer when type is boolean
+    if (
+      baseModelSqlv2.isPg &&
+      ['sum', 'sumDistinct', 'avgDistinct', 'avg'].includes(
+        columnOptions.rollup_function,
+      ) &&
+      (['bool', 'boolean'].includes(rollupColumn.dt) || selectValueIsBoolean)
+    ) {
+      // a boolean formula (e.g. `{Checkbox}`) is an expression, not a column
+      qb[columnOptions.rollup_function as string]?.(
+        knex.raw('(??)::integer', [selectColumnName]),
+      );
+      profiler.log('applyFunction done');
+      return;
+    }
+
+    // SQL Server's `bit` type is invalid for the sum/avg/min/max aggregate
+    // operators ("Operand data type bit is invalid for sum operator"). Cast to
+    // FLOAT so they all work: SUM stays exact, AVG keeps its fraction (CAST AS
+    // INT would integer-truncate AVG, e.g. 0.5 -> 0), MIN/MAX yield 0.0/1.0.
+    // COUNT/countDistinct accept `bit` directly and are intentionally excluded.
+    if (
+      baseModelSqlv2.isMssql &&
+      ['sum', 'sumDistinct', 'avgDistinct', 'avg', 'min', 'max'].includes(
+        columnOptions.rollup_function,
+      ) &&
+      (['bit', 'bool', 'boolean'].includes(rollupColumn.dt?.toLowerCase()) ||
+        selectValueIsBoolean)
+    ) {
+      selectColumnName = knex.raw('CAST(?? AS FLOAT)', [selectColumnName]);
+    }
+
+    // MSSQL nested-subquery path: select the per-row value; the aggregate
+    // is applied by wrapMssqlNestedAgg over an enclosing derived table.
+    if (baseModelSqlv2.isMssql && selectColumnIsSubquery) {
+      qb.select({ [NC_ROLLUP_VAL_ALIAS]: selectColumnName });
+      profiler.log('applyFunction done (mssql derived-agg deferred)');
+      return;
+    }
+
+    // Oracle: a string Formula lowers to a CLOB, which COUNT / COUNT DISTINCT /
+    // MIN / MAX all reject (ORA-22849 — "Type CLOB is not supported for this
+    // function or operator"). Normalize it to a comparable VARCHAR2 via
+    // DBMS_LOB.SUBSTR(TO_CLOB(x), 4000, 1): TO_CLOB is an identity no-op on an
+    // already-CLOB / VARCHAR2 operand, and SUBSTR yields VARCHAR2(4000). The
+    // sum/avg family is numeric (never CLOB) so it is intentionally excluded.
+    if (
+      baseModelSqlv2.isOracle &&
+      selectValueIsString &&
+      ['count', 'countDistinct', 'min', 'max'].includes(
+        columnOptions.rollup_function as string,
+      )
+    ) {
+      selectColumnName = knex.raw('DBMS_LOB.SUBSTR(TO_CLOB(??), 4000, 1)', [
+        selectColumnName,
+      ]);
+    }
+
+    // Only the sum family defaults to 0 on an empty set; avg/min/max stay NULL.
+    if (['sum', 'sumDistinct'].includes(columnOptions.rollup_function)) {
+      if (baseModelSqlv2.isOracle) {
+        const fn = columnOptions.rollup_function as string;
+        const distinct = fn === 'sumDistinct';
+        const baseFn = fn.replace('Distinct', '');
+        qb.select(
+          knex.raw(`COALESCE(${baseFn}(${distinct ? 'distinct ' : ''}??), 0)`, [
+            selectColumnName,
+          ]),
+        );
+      } else {
+        qb.select(
+          knex.raw(`COALESCE((??), 0)`, [
+            knex[columnOptions.rollup_function as string]?.(selectColumnName),
+          ]),
+        );
+      }
+    } else {
+      qb[columnOptions.rollup_function as string]?.(selectColumnName);
+    }
+    profiler.log('applyFunction done');
+  };
+
+  // Rewrite `SELECT agg(subquery) FROM related …` (illegal on MSSQL) into
+  // `SELECT agg(v) FROM (SELECT subquery AS v FROM related …) sub`.
+  // Pass-through on non-MSSQL and on direct-column rollups.
+  const wrapMssqlNestedAgg = (innerQb: any) => {
+    if (!(baseModelSqlv2.isMssql && selectColumnIsSubquery)) return innerQb;
+    const fn = columnOptions.rollup_function as string;
+    const distinct = ['sumDistinct', 'avgDistinct', 'countDistinct'].includes(
+      fn,
+    );
+    const baseFn = fn.replace('Distinct', '');
+    const aggInner = `${baseFn}(${distinct ? 'distinct ' : ''}??)`;
+    const aggSql = ['sum', 'sumDistinct'].includes(fn)
+      ? `COALESCE(${aggInner}, 0)`
+      : aggInner;
+    return knex
+      .from(innerQb.as(`${refTableAlias}__agg`))
+      .select(knex.raw(aggSql, [NC_ROLLUP_VAL_ALIAS]));
+  };
+
+  const relationType = isMMLike
+    ? RelationTypes.MANY_TO_MANY
+    : relationColumnOption.type;
+
+  // Link conditions of a rollup, or the related RLS of a Links count.
+  const applyScopeFilters = async (
+    qb: Knex.QueryBuilder,
+    scopeModel: IBaseModelSqlV2,
+  ) => {
+    if (!column) return;
+    if (column.uidt === UITypes.Links) {
+      await applyRelatedRls(scopeModel, qb, refTableAlias);
+      return;
+    }
+    await extractLinkRelFiltersAndApply({
+      qb,
+      column,
+      alias: refTableAlias,
+      table: scopeModel.model,
+      baseModel: scopeModel,
+      context: scopeModel.context,
+    });
+  };
+
+  // The linked records of the current row, before any aggregate is selected.
+  // Built once for a plain rollup, once per aggregate for a formula rollup.
+  // Wrapped: an awaited query builder is a thenable and would execute.
+  const buildScope = async (): Promise<{ qb: Knex.QueryBuilder } | null> => {
+    switch (relationType) {
+      case RelationTypes.HAS_MANY:
+      case RelationTypes.ONE_TO_ONE: {
+        profiler.log('Relation: ' + relationColumnOption.type);
+        // a one-to-one seen from the side holding the key: the linked record
+        // is the parent this row points at
+        if (relationColumn.meta?.bt) {
+          // older rollups made here targeted this row's own table
+          if (rollupColumn.fk_model_id !== parentModel.id) return null;
+          const qb = knex(
+            dbQueryClient.tableAlias(
+              knex,
+              parentBaseModel.getTnPath(parentModel),
+              refTableAlias,
+            ),
+          ).where(
+            knex.ref(`${refTableAlias}.${parentCol.column_name}`),
+            '=',
+            knex.ref(
+              `${alias || childBaseModel.getTnPath(childModel.table_name)}.${
+                childCol.column_name
+              }`,
+            ),
+          );
+          const softDeleteFilter = await getAliasedSoftDeleteFilter(
+            parentBaseModel,
+            refTableAlias,
+          );
+          if (softDeleteFilter) {
+            qb.where(softDeleteFilter);
+          }
+          await applyScopeFilters(qb, parentBaseModel);
+          return { qb };
+        }
+        const qb = knex(
+          dbQueryClient.tableAlias(
+            knex,
+            childBaseModel.getTnPath(childModel),
+            refTableAlias,
+          ),
+        ).where(
+          knex.ref(
+            `${alias || parentBaseModel.getTnPath(parentModel.table_name)}.${
+              parentCol.column_name
+            }`,
+          ),
+          '=',
+          knex.ref(`${refTableAlias}.${childCol.column_name}`),
+        );
+
+        // Exclude soft-deleted child records
+        const softDeleteFilter = await getAliasedSoftDeleteFilter(
+          childBaseModel,
+          refTableAlias,
+        );
+        if (softDeleteFilter) {
+          qb.where(softDeleteFilter);
+        }
+
+        await applyScopeFilters(qb, childBaseModel);
+        return { qb };
+      }
+
+      case RelationTypes.MANY_TO_MANY: {
+        profiler.log('Relation: ' + relationColumnOption.type);
+        const mmModel = await relationColumnOption.getMMModel();
+        if (!mmModel) {
+          return null;
+        }
+        const mmChildCol = await relationColumnOption.getMMChildColumn();
+        const mmParentCol = await relationColumnOption.getMMParentColumn();
+        const assocBaseModel = await Model.getBaseModelSQL(mmContext, {
+          id: mmModel.id,
+          dbDriver: knex,
+        });
+
+        const qb = knex(
+          dbQueryClient.tableAlias(
+            knex,
+            parentBaseModel.getTnPath(parentModel?.table_name),
+            refTableAlias,
+          ),
+        )
+          .innerJoin(
+            assocBaseModel.getTnPath(mmModel.table_name),
+            `${assocBaseModel.getTnPath(mmModel.table_name)}.${
+              mmParentCol.column_name
+            }`,
+            '=',
+            `${refTableAlias}.${parentCol.column_name}`,
+          )
+          .where(
+            knex.ref(
+              `${assocBaseModel.getTnPath(mmModel.table_name)}.${
+                mmChildCol.column_name
+              }`,
+            ),
+            '=',
+            knex.ref(
+              `${alias || childBaseModel.getTnPath(childModel.table_name)}.${
+                childCol.column_name
+              }`,
+            ),
+          );
+
+        // Exclude soft-deleted parent records from MM rollup
+        const mmSoftDeleteFilter = await getAliasedSoftDeleteFilter(
+          parentBaseModel,
+          refTableAlias,
+        );
+        if (mmSoftDeleteFilter) {
+          qb.where(mmSoftDeleteFilter);
+        }
+
+        // no column yet while a new rollup is dry-run
+        await applyScopeFilters(qb, parentBaseModel);
+
+        // V2 MO/OO: single-record semantics — limit to 1 row
+        if (isBtLikeV2Junction(relationColumn)) {
+          qb.limit(1);
+        }
+        return { qb };
+      }
+
+      default:
+        NcError.get(context).unSupportedRelation(relationColumnOption.type);
+    }
+  };
+
+  if (isRollupFormula(columnOptions)) {
+    // many-to-many values follow the order of the links in the cell
+    let linkOrderRef: string | undefined;
+    if (relationType === RelationTypes.MANY_TO_MANY) {
+      const mmModel = await relationColumnOption.getMMModel();
+      // the junction has an order column per side; this one orders this record's links
+      const orderCol = await relationColumnOption.getMMChildOrderColumn();
+      if (mmModel && orderCol) {
+        const assocBaseModel = await Model.getBaseModelSQL(mmContext, {
+          id: mmModel.id,
+          dbDriver: knex,
+        });
+        linkOrderRef = knex
+          .raw('??.??', [
+            assocBaseModel.getTnPath(mmModel.table_name),
+            orderCol.column_name,
+          ])
+          .toQuery();
+      }
+    }
+    let formulaBuilder: Awaited<ReturnType<typeof genRollupFormulaSelect>>;
+    try {
+      formulaBuilder = await genRollupFormulaSelect({
+        linkOrderRef,
+        baseModelSqlv2,
+        knex,
+        columnOptions,
+        refBaseModel,
+        refModel:
+          rollupColumn.fk_model_id === childModel.id ? childModel : parentModel,
+        rollupColumn,
+        refTableAlias,
+        parentColumns,
+        buildScope,
+      });
+    } catch (e) {
+      // a formula broken by a later schema change marks its cells, not the read
+      if (
+        param.throwOnFormulaError ||
+        !(e instanceof NcBaseErrorv2 && e.error === NcErrorType.ERR_FORMULA)
+      ) {
+        throw e;
+      }
+      formulaBuilder = null;
+    }
+    profiler.end();
+    return formulaBuilder ?? errorSentinel();
+  }
+
+  // sum / avg over a field that is no longer numeric (its type changed after
+  // the rollup was saved) shows as an error in the cell, not a failed read
+  if (
+    ['sum', 'sumDistinct', 'avg', 'avgDistinct'].includes(
+      columnOptions.rollup_function,
+    )
+  ) {
+    let resultType: FormulaDataTypes | undefined;
+    if (rollupColumn.uidt === UITypes.Formula) {
+      resultType = (
+        await rollupColumn.getColOptions<FormulaColumn>()
+      )?.getParsedTree?.()?.dataType;
+    } else if (rollupColumn.uidt === UITypes.Rollup) {
+      const inner = await rollupColumn.getColOptions<RollupColumn>();
+      // outside a formula, the only resolved type is a min/max date
+      resultType = isRollupFormula(inner)
+        ? inner.parsed_tree?.dataType
+        : getRollupResultUidt({ uidt: rollupColumn.uidt, colOptions: inner })
+        ? FormulaDataTypes.DATE
+        : undefined;
+    }
+    const numeric =
+      resultType !== undefined
+        ? [
+            FormulaDataTypes.NUMERIC,
+            FormulaDataTypes.BOOLEAN,
+            FormulaDataTypes.UNKNOWN,
+            // pg sums intervals but not booleans
+            ...(baseModelSqlv2.isPg
+              ? [FormulaDataTypes.INTERVAL]
+              : [FormulaDataTypes.COND_EXP, FormulaDataTypes.LOGICAL]),
+          ].includes(resultType)
+        : // checkbox sums / averages through bool casts
+          [UITypes.Formula, UITypes.Rollup, UITypes.Checkbox].includes(
+            rollupColumn.uidt,
+          ) ||
+          isNumericCol(rollupColumn.uidt) ||
+          getAvailableRollupForUiType(rollupColumn.uidt).includes(
+            columnOptions.rollup_function,
+          );
+    // other dialects cast text to a number, so the old values still read
+    if (!numeric && (baseModelSqlv2.isPg || baseModelSqlv2.isMssql)) {
+      return errorSentinel();
+    }
+  }
+
+  const scope = await buildScope();
+  if (!scope) {
+    return errorSentinel();
+  }
+  const { qb } = scope;
+  await applyFunction(qb);
+  profiler.end();
+  return {
+    builder: wrapMssqlNestedAgg(qb),
+  };
+}

@@ -1,0 +1,29 @@
+import { FormulaDataTypes, UITypes, isNumericFieldType } from 'universaldatabase-sdk'
+import { getAbstractType, renderSingleLineText } from '../utils/canvas'
+
+export const NullCellRenderer: CellRenderer = {
+  render: (ctx, props) => {
+    const { column, sqlUis, x, y, width, height, padding, textColor = themeV4Colors.gray['300'], getColor } = props
+
+    const isNumericField =
+      isNumericFieldType(column, getAbstractType(column, sqlUis)) ||
+      ((column.uidt === UITypes.Formula || column.uidt === UITypes.Rollup) &&
+        getColumnParsedTree(column)?.dataType === FormulaDataTypes.NUMERIC)
+
+    const { x: xOffset, y: yOffset } = renderSingleLineText(ctx, {
+      x: isNumericField ? x + width - padding : x + padding,
+      y,
+      textAlign: isNumericField ? 'right' : 'left',
+      text: 'NULL',
+      maxWidth: width - padding * 2,
+      fontFamily: `500 13px Inter`,
+      fillStyle: getColor(textColor),
+      height,
+    })
+
+    return {
+      x: xOffset,
+      y: yOffset,
+    }
+  },
+}

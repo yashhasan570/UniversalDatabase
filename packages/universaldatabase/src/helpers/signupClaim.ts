@@ -1,0 +1,153 @@
+import UniversalDatabaseCache from '~/cache/UniversalDatabaseCache';
+import { NcError } from '~/helpers/catchError';
+import { normalizeEmail } from '~/utils/emailUtils';
+
+// Only has to outlive the re-check + insert below (a few ms). Kept short because
+// it is a crash net: if a process dies mid-insert, that one address cannot
+// register until the key expires.
+const CLAIM_TTL_SECONDS = 10;
+
+const claimKey = (email: string) => `signup_claim:${normalizeEmail(email)}`;
+
+/**
+ * Serialise new-account creation for one canonical address.
+ *
+ * Signup checks whether the address is taken and then inserts, with a bcrypt
+ * hash in between — concurrent requests both pass the check and both create an
+ * account, defeating the canonical-email dedup.
+ *
+ * Wraps the create branch only. Invite pre-provisioning must not throw on a
+ * lost race, so it uses `findOrCreateUnderSignupClaim` instead.
+ *
+ * Best-effort: `setIfNotExist` is atomic against Redis and within a single
+ * process, but returns true unconditionally when the cache is disabled.
+ */
+export async function withSignupClaim<T>(
+  email: string,
+  findExisting: () => Promise<unknown>,
+  create: () => Promise<T>,
+): Promise<T> {
+  const key = claimKey(email);
+
+  const claimed = await UniversalDatabaseCache.setIfNotExist(
+    'root',
+    key,
+    '1',
+    CLAIM_TTL_SECONDS,
+  );
+
+  // Held only while another signup for this address is mid-insert, so by the
+  // time this response lands the address really is taken.
+  if (!claimed) {
+    NcError.badRequest('User already exist');
+  }
+
+  try {
+    if (await findExisting()) {
+      NcError.badRequest('User already exist');
+    }
+
+    return await create();
+  } finally {
+    // Swallowed: awaiting bare, a Redis blip here would replace an already-created
+    // account with a 500, and the retry would hit "User already exist". The TTL
+    // releases the claim anyway.
+    await UniversalDatabaseCache.del('root', key).catch(() => {});
+  }
+}
+
+/**
+ * Invite-side counterpart of `withSignupClaim`: takes the same claim so a
+ * pre-provisioned (blank-password) row cannot race `signup()`, but a loser
+ * returns the row that won instead of throwing.
+ */
+export async function findOrCreateUnderSignupClaim<T>(
+  email: string,
+  find: () => Promise<T | null | undefined>,
+  create: () => Promise<T>,
+  { retries = 20, retryDelayMs = 100 } = {},
+): Promise<{ value: T; created: boolean }> {
+  const existing = await find();
+  if (existing) return { value: existing, created: false };
+
+  const key = claimKey(email);
+
+  const claimed = await UniversalDatabaseCache.setIfNotExist(
+    'root',
+    key,
+    '1',
+    CLAIM_TTL_SECONDS,
+  );
+
+  if (!claimed) {
+    // A signup is mid-insert for this address; wait for its row.
+    for (let i = 0; i < retries; i++) {
+      await new Promise((r) => setTimeout(r, retryDelayMs));
+      const winner = await find();
+      if (winner) return { value: winner, created: false };
+    }
+    NcError.badRequest('Unable to invite user right now, please retry');
+  }
+
+  try {
+    const raced = await find();
+    if (raced) return { value: raced, created: false };
+
+    return { value: await create(), created: true };
+  } finally {
+    await UniversalDatabaseCache.del('root', key).catch(() => {});
+  }
+}
+
+// Covers a transaction, not just one insert; still a crash net.
+const HELD_CLAIM_TTL_SECONDS = 30;
+
+const claimTimeouts = new WeakSet<object>();
+
+/** True only for `withSignupClaimsHeld`'s own "claim not taken in time" error. */
+export const isSignupClaimTimeout = (e: unknown) =>
+  typeof e === 'object' && e !== null && claimTimeouts.has(e);
+
+/**
+ * Holds the signup claim of each address until `fn` settles, waiting for one
+ * another request holds. For invites that insert the account inside a
+ * transaction: the claim has to outlive the commit, or a signup can pass its
+ * check before the row is visible. `fn` must re-check for an existing account.
+ */
+export async function withSignupClaimsHeld<T>(
+  emails: string[],
+  fn: () => Promise<T>,
+  { retries = 20, retryDelayMs = 100 } = {},
+): Promise<T> {
+  // Sorted, so two requests claiming overlapping sets cannot wait on each other.
+  const keys = [...new Set(emails.map(claimKey))].sort();
+  const held: string[] = [];
+  try {
+    for (const key of keys) {
+      for (let attempt = 0; ; attempt++) {
+        const claimed = await UniversalDatabaseCache.setIfNotExist(
+          'root',
+          key,
+          '1',
+          HELD_CLAIM_TTL_SECONDS,
+        );
+        if (claimed) break;
+        if (attempt >= retries) {
+          try {
+            NcError.badRequest('Unable to invite user right now, please retry');
+          } catch (e) {
+            claimTimeouts.add(e);
+            throw e;
+          }
+        }
+        await new Promise((r) => setTimeout(r, retryDelayMs));
+      }
+      held.push(key);
+    }
+    return await fn();
+  } finally {
+    for (const key of held) {
+      await UniversalDatabaseCache.del('root', key).catch(() => {});
+    }
+  }
+}

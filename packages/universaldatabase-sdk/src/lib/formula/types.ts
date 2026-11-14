@@ -1,0 +1,132 @@
+import { SqlUiFactory } from '../sqlUi';
+import UITypes from '../UITypes';
+import { FormulaDataTypes, JSEPNode } from './enums';
+import {
+  ArithmeticOperator,
+  ComparisonOperator,
+  StringOperator,
+} from './operators';
+import type { RollupAggregate, RollupModifier } from './rollupFormula';
+import { UnifiedMetaType } from '~/lib/types';
+
+export interface ReferencedInfo {
+  referencedColumn?: {
+    id: string;
+    uidt: string;
+    intermediaryUidt?: string;
+    intermediaryId?: string;
+    // Lookup only: values are the referenced field's own, with no formula hop
+    directLookup?: boolean;
+  };
+  invalidForReferenceColumn?: boolean;
+  uidtCandidates?: UITypes[];
+}
+
+export type BaseFormulaNode = {
+  type: JSEPNode;
+  dataType?: FormulaDataTypes;
+  isDataArray?: boolean;
+  inArrayFormat?: boolean;
+  cast?: FormulaDataTypes;
+  errors?: Set<string>;
+  // set by jsepIndexHook when parsing with position tracking
+  indexStart?: number;
+  nodeLength?: number;
+} & ReferencedInfo;
+
+export interface BinaryExpressionNode extends BaseFormulaNode {
+  operator: ArithmeticOperator | ComparisonOperator | StringOperator;
+  type: JSEPNode.BINARY_EXP;
+  right: ParsedFormulaNode;
+  left: ParsedFormulaNode;
+}
+
+export interface CallExpressionNode extends BaseFormulaNode {
+  type: JSEPNode.CALL_EXP;
+  arguments: ParsedFormulaNode[];
+  callee: {
+    type?: string;
+    name: string;
+  };
+  // rollup formulas only: canonical name of a call that aggregates over / modifies `values`
+  rollupAggregate?: RollupAggregate;
+  rollupModifier?: RollupModifier;
+}
+
+export interface IdentifierNode extends BaseFormulaNode {
+  type: JSEPNode.IDENTIFIER;
+  name: string;
+  raw: string;
+}
+
+export interface LiteralNode extends BaseFormulaNode {
+  type: JSEPNode.LITERAL;
+  value: string | number;
+  raw: string;
+}
+
+export interface UnaryExpressionNode extends BaseFormulaNode {
+  type: JSEPNode.UNARY_EXP;
+  operator: string;
+  argument: ParsedFormulaNode;
+}
+
+export interface ArrayExpressionNode extends BaseFormulaNode {
+  type: JSEPNode.ARRAY_EXP;
+}
+
+export interface MemberExpressionNode extends BaseFormulaNode {
+  type: JSEPNode.MEMBER_EXP;
+}
+
+export interface CompoundNode extends BaseFormulaNode {
+  type: JSEPNode.COMPOUND;
+}
+
+export type ParsedFormulaNode =
+  | BinaryExpressionNode
+  | CallExpressionNode
+  | IdentifierNode
+  | LiteralNode
+  | MemberExpressionNode
+  | ArrayExpressionNode
+  | UnaryExpressionNode
+  | CompoundNode;
+
+export interface FormulaMetaCustomValidation {
+  (
+    args: FormulaDataTypes[],
+    parseTree: CallExpressionNode,
+    columns: UnifiedMetaType.IColumn[]
+  ): void;
+}
+
+export interface FormulaMeta {
+  validation?: {
+    args?: {
+      min?: number;
+      max?: number;
+      rqd?: number;
+
+      // array of allowed types when args types are not same
+      // types should be in order of args
+      type?: FormulaDataTypes | FormulaDataTypes[];
+    };
+    custom?: FormulaMetaCustomValidation;
+  };
+  description?: string;
+  syntax?: string;
+  examples?: string[];
+  returnType?: ((args: any[]) => FormulaDataTypes) | FormulaDataTypes;
+  docsUrl?: string;
+}
+export type SqlUI = ReturnType<(typeof SqlUiFactory)['create']>;
+export type ClientTypeOrSqlUI =
+  | 'mysql'
+  | 'pg'
+  | 'sqlite3'
+  | 'mysql2'
+  | 'mariadb'
+  | 'sqlite'
+  | 'snowflake'
+  | SqlUI;

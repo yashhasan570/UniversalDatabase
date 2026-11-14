@@ -1,0 +1,459 @@
+import { isFieldTrackingLmbCol } from 'universaldatabase-sdk';
+import type { Logger } from '@nestjs/common';
+import type { NcContext } from 'universaldatabase-sdk';
+import type CustomKnex from '~/db/CustomKnex';
+import type { Knex } from '~/db/CustomKnex';
+import type { IBaseModelSqlV2 } from '~/db/IBaseModelSqlV2';
+import type { MetaService } from '~/meta/meta.service';
+import type { FilterOptions, SortOptions } from '../../field-handler.interface';
+import { handleCurrentUserFilter } from '~/helpers/conditionHelpers';
+import {
+  ncIsStringHasValue,
+  ncLikeTerm,
+} from '~/db/field-handler/utils/handlerUtils';
+import { getColumnName } from '~/helpers/dbHelpers';
+import { lmbFieldQueryBuilder } from '~/db/formulav2/lmtFieldQueryBuilder';
+import { escapeBindingPlaceholders, sanitize } from '~/helpers/sqlSanitize';
+import { GenericFieldHandler } from '~/db/field-handler/handlers/generic';
+import { NcBaseErrorv2, NcError } from '~/helpers/catchError';
+import { extractProps } from '~/helpers/extractProps';
+import { extractDisplayNameFromEmail } from '~/utils/emailUtils';
+import { BaseUser, type Column, Filter } from '~/models';
+
+const USER_ID_OPS = new Set([
+  'eq',
+  'neq',
+  'not',
+  'in',
+  'anyof',
+  'allof',
+  'nanyof',
+  'nallof',
+]);
+
+export class UserGeneralHandler extends GenericFieldHandler {
+  protected singleLineTextHandler: GenericFieldHandler =
+    new GenericFieldHandler();
+
+  // `like`/`nlike` against a User-style column match the visible name: the
+  // users whose name matches are resolved first, then rows by their ids.
+  override filterLike = (...args: Parameters<typeof this.filterLikeNlike>) =>
+    this.filterLikeNlike(...args);
+  override filterNlike = (...args: Parameters<typeof this.filterLikeNlike>) =>
+    this.filterLikeNlike(...args);
+
+  /**
+   * Shared SQL expression that maps the stored user-ID column to its
+   * display-name representation via nested REPLACE() chained over a given
+   * user list. Used by `applySort` (with all base users), which needs the
+   * column to read as display-text, not as a raw user-id.
+   *
+   * The dialect-specific User handlers (`UserPgHandler`, `UserSqliteHandler`)
+   * override `replaceDelimitedWithKeyValue` to use their own
+   * `replace_delimited_with_keyvalue` SQL function for efficiency. The
+   * MySQL/MSSQL default uses native nested REPLACE().
+   */
+  protected async buildDisplayNameExpression(
+    knex: CustomKnex,
+    needleColumn: string | Knex.QueryBuilder | Knex.RawBuilder,
+    users: Awaited<ReturnType<typeof BaseUser.getUsersList>>,
+    isPublic = false,
+  ): Promise<string> {
+    return escapeBindingPlaceholders(
+      this.replaceDelimitedWithKeyValue({
+        knex,
+        needleColumn,
+        stack: users.map((user) => ({
+          key: user.id,
+          // Public responses show the derived name, never the email.
+          value: isPublic
+            ? extractDisplayNameFromEmail(user.email ?? '', user.display_name)
+            : user.display_name || user.email,
+        })),
+      }),
+    );
+  }
+
+  /**
+   * Sort User/CreatedBy/LastModifiedBy by display name. Stored values are
+   * comma-delimited user-ids; nested REPLACE() (or the PG/SQLite
+   * `replace_delimited_with_keyvalue` function in dialect overrides) maps
+   * each id to its display-name before the ORDER BY.
+   */
+  override async applySort(
+    qb: Knex.QueryBuilder,
+    column: Column,
+    direction: 'asc' | 'desc',
+    options: SortOptions,
+  ): Promise<void> {
+    const { nulls, context } = options;
+    const knex = options.knex as CustomKnex;
+
+    // For CreatedBy / LastModifiedBy the persisted column name may differ
+    // from `column.column_name` (auto-magic columns). Resolve into a local —
+    // never mutate the shared/cached `Column`, which would overwrite its
+    // metadata for the rest of the request (legacy sortV2 never mutated).
+    // A LastModifiedBy column tracking specific fields has no physical
+    // column — sort on its latest-tracked-editor expression instead.
+    const columnName: any = isFieldTrackingLmbCol(column)
+      ? (
+          await lmbFieldQueryBuilder({
+            baseModel: options.baseModel,
+            column,
+            model: await column.getModel(),
+            tableAlias: options.alias,
+          })
+        ).builder
+      : await getColumnName(context, column);
+
+    const baseUsers = await BaseUser.getUsersList(context, {
+      base_id: column.base_id,
+      include_internal_user: true,
+    });
+    const expr = await this.buildDisplayNameExpression(
+      knex,
+      columnName,
+      baseUsers,
+      !!context?.is_public,
+    );
+    qb.orderBy(sanitize(knex.raw(expr)), direction, nulls);
+  }
+
+  override async filter(
+    knex: CustomKnex,
+    filter: Filter,
+    column: Column,
+    options: FilterOptions,
+  ) {
+    const { alias, context } = options;
+    let val = filter.value;
+    const field =
+      options.customWhereClause ??
+      (isFieldTrackingLmbCol(column)
+        ? // a LastModifiedBy column tracking specific fields has no
+          // physical column — filter on its latest-tracked-editor expression
+          (
+            await lmbFieldQueryBuilder({
+              baseModel: options.baseModel,
+              column,
+              model: await column.getModel(),
+              tableAlias: alias,
+            })
+          ).builder
+        : alias
+        ? `${alias}.${column.column_name}`
+        : column.column_name);
+
+    handleCurrentUserFilter(context, {
+      column,
+      filter,
+      setVal: (newVal) => (val = newVal),
+    });
+    val = await this.resolveEmailFilterValue(
+      context,
+      column,
+      filter.comparison_op,
+      val,
+    );
+    return await this.handleFilter(
+      { val, sourceField: field },
+      { knex, filter, column },
+      options,
+    );
+  }
+
+  /**
+   * Stored user values are ids, so an email in a filter value is mapped to
+   * its base user's id. An email that matches no user is kept as-is and
+   * therefore still matches nothing. Public requests never resolve: they do
+   * not see emails, and resolving would reveal whether one is a member.
+   */
+  protected async resolveEmailFilterValue(
+    context: NcContext,
+    column: Column,
+    comparisonOp: string,
+    val: string,
+  ): Promise<string> {
+    if (context.is_public || !USER_ID_OPS.has(comparisonOp)) return val;
+    // Non-strings (e.g. resolved current-user ids) pass through untouched.
+    if (typeof val !== 'string' || !val.includes('@')) return val;
+
+    // Split for eq/neq too: a multi-user value is a comma-separated id list.
+    const items = val.split(',');
+    const baseUsers = await BaseUser.getUsersList(context, {
+      base_id: column.base_id,
+      include_internal_user: true,
+      include_ws_deleted: true,
+    });
+    const idByEmail = new Map<string, string>();
+    for (const bu of baseUsers) {
+      const key = bu.email?.trim().toLowerCase();
+      if (key && !idByEmail.has(key)) idByEmail.set(key, bu.id);
+    }
+
+    const resolved = items.map((item) =>
+      item.includes('@')
+        ? idByEmail.get(item.trim().toLowerCase()) ?? item
+        : item,
+    );
+    return resolved.join(',');
+  }
+
+  override async parseUserInput(params: {
+    value: any;
+    row: any;
+    column: Column;
+    options?: {
+      baseModel?: IBaseModelSqlV2;
+      context?: NcContext;
+      metaService?: MetaService;
+      logger?: Logger;
+    };
+  }): Promise<{ value: any }> {
+    const userIds: string[] = [];
+    let evalValue: any = params.value;
+    if (typeof evalValue === 'string' && /^\s*[{[]/.test(evalValue)) {
+      try {
+        evalValue = JSON.parse(evalValue);
+      } catch (e) {}
+    }
+
+    const baseUsers = await BaseUser.getUsersList(
+      params.options.context ?? params.options.baseModel.context,
+      {
+        base_id: params.options.baseModel.model.base_id,
+        // deleted user may still exists on some fields
+        // it's still valid as a historical record
+        include_ws_deleted: true,
+        include_internal_user: true,
+      },
+    );
+
+    // Index workspace users by id and email so each per-value lookup below is O(1) instead of a
+    // baseUsers.find scan — the validation runs once per user value in the cell, so the scan was
+    // O(values × workspaceUsers). First occurrence wins, matching find.
+    const baseUserById = new Map<string, (typeof baseUsers)[number]>();
+    const baseUserByEmail = new Map<string, (typeof baseUsers)[number]>();
+    for (const bu of baseUsers) {
+      if (bu.id != null && !baseUserById.has(bu.id))
+        baseUserById.set(bu.id, bu);
+      if (bu.email != null && !baseUserByEmail.has(bu.email))
+        baseUserByEmail.set(bu.email, bu);
+    }
+
+    if (typeof evalValue === 'object') {
+      const users: { id?: string; email?: string }[] = Array.isArray(evalValue)
+        ? evalValue
+        : [evalValue];
+      for (const userObj of users) {
+        const user = extractProps(userObj, ['id', 'email']);
+        try {
+          if ('id' in user) {
+            const u = baseUserById.get(user.id);
+            if (!u) {
+              NcError.invalidValueForField({
+                value: params.value,
+                column: params.column.title,
+                type: params.column.uidt,
+                reason: `User with id '${user.id}' is not part of this workspace`,
+              });
+            }
+            userIds.push(u.id);
+          } else if ('email' in user) {
+            // skip null input
+            if (!user.email) continue;
+            // trim extra spaces
+            user.email = user.email.trim();
+            // skip empty input
+            if (user.email.length === 0) continue;
+            const u = baseUserByEmail.get(user.email);
+            if (!u) {
+              NcError.invalidValueForField({
+                value: params.value,
+                column: params.column.title,
+                type: params.column.uidt,
+                reason: `User with email '${user.email}' is not part of this workspace`,
+              });
+            }
+            userIds.push(u.id);
+          } else {
+            NcError.invalidValueForField({
+              value: params.value,
+              column: params.column.title,
+              type: params.column.uidt,
+              reason: `Invalid user object`,
+            });
+          }
+        } catch (e) {
+          NcError.invalidValueForField({
+            value: params.value,
+            column: params.column.title,
+            type: params.column.uidt,
+            reason: e.message,
+          });
+        }
+      }
+    } else if (typeof evalValue === 'string') {
+      const users = evalValue.split(',').map((u) => u.trim());
+      for (const user of users) {
+        try {
+          if (user.length === 0) continue;
+          if (user.includes('@')) {
+            const u = baseUserByEmail.get(user);
+            if (!u) {
+              NcError.invalidValueForField({
+                value: params.value,
+                column: params.column.title,
+                type: params.column.uidt,
+                reason: `User with email '${user}' is not part of this workspace`,
+              });
+            }
+            userIds.push(u.id);
+          } else {
+            const u = baseUserById.get(user);
+            if (!u) {
+              NcError.invalidValueForField({
+                value: params.value,
+                column: params.column.title,
+                type: params.column.uidt,
+                reason: `User with id '${user}' is not part of this workspace`,
+              });
+            }
+            userIds.push(u.id);
+          }
+        } catch (e) {
+          if (e instanceof NcBaseErrorv2) {
+            throw e;
+          }
+          NcError.invalidValueForField({
+            value: params.value,
+            column: params.column.title,
+            type: params.column.uidt,
+            reason: e.message,
+          });
+        }
+      }
+    } else {
+      params.options.logger.error(`${evalValue} is not a valid user input`);
+      NcError.invalidValueForField({
+        value: params.value,
+        column: params.column.title,
+        type: params.column.uidt,
+        reason: `Invalid user object`,
+      });
+    }
+
+    if (userIds.length === 0) {
+      evalValue = null;
+    } else {
+      const userSet = new Set(userIds);
+
+      if (userSet.size !== userIds.length) {
+        NcError.invalidValueForField({
+          value: params.value,
+          column: params.column.title,
+          type: params.column.uidt,
+          reason: 'Duplicate users not allowed for user field',
+        });
+      }
+
+      if (params.column.meta?.is_multi) {
+        evalValue = userIds.join(',');
+      } else {
+        if (userIds.length > 1) {
+          NcError.invalidValueForField({
+            value: params.value,
+            column: params.column.title,
+            type: params.column.uidt,
+            reason: `Multiple users not allowed for '${params.column.title}'`,
+          });
+        } else {
+          evalValue = userIds[0];
+        }
+      }
+    }
+    return { value: evalValue };
+  }
+
+  async filterLikeNlike(
+    args: {
+      sourceField: string | Knex.QueryBuilder | Knex.RawBuilder;
+      val: any;
+    },
+    rootArgs: { knex: CustomKnex; filter: Filter; column: Column },
+    options: FilterOptions,
+  ) {
+    const { sourceField } = args;
+    const { val } = args;
+    const { knex, filter, column } = rootArgs;
+    const { context } = options;
+
+    // Empty value (fresh filter row): skip the display-name substitution —
+    // the generic handler's empty-value semantics apply to the raw column.
+    if (!ncIsStringHasValue(val)) {
+      return filter.comparison_op === 'like'
+        ? this.singleLineTextHandler.filterLike(args, rootArgs, options)
+        : this.singleLineTextHandler.filterNlike(args, rootArgs, options);
+    }
+
+    const baseUsers = await BaseUser.getUsersList(context, {
+      base_id: column.base_id,
+      include_internal_user: true,
+    });
+    const users = baseUsers.filter((user) => {
+      // A full id (what `@me` resolves to) matches its user; a partial one
+      // matches nothing.
+      if (user.id === val) return true;
+      const filterVal = ncLikeTerm(val).toLowerCase();
+      // Public responses show the derived name, never the email.
+      const displayValue = (
+        context.is_public
+          ? extractDisplayNameFromEmail(user.email ?? '', user.display_name)
+          : user.display_name || user.email || ''
+      ).toLowerCase();
+
+      return displayValue.includes(filterVal);
+    });
+    const matchedIds = users.map((user) => user.id);
+
+    // Match the cell's ids, not a rewritten text: an id left unrewritten can
+    // contain the value itself.
+    const isLike = filter.comparison_op === 'like';
+    if (!matchedIds.length) {
+      return {
+        rootApply: undefined,
+        clause: (qb: Knex.QueryBuilder) => {
+          qb.whereRaw(isLike ? '1 = 0' : '1 = 1');
+        },
+      };
+    }
+    return this.filterAnyof(
+      { sourceField, val: matchedIds },
+      {
+        knex,
+        column,
+        filter: new Filter({
+          ...filter,
+          comparison_op: isLike ? 'anyof' : 'nanyof',
+        }),
+      },
+      options,
+    );
+  }
+
+  replaceDelimitedWithKeyValue(param: {
+    knex: CustomKnex;
+    stack: { key: string; value: string }[];
+    needleColumn: string | Knex.QueryBuilder | Knex.RawBuilder;
+    delimiter?: string;
+  }) {
+    const { knex, needleColumn, stack } = param;
+    return stack.reduce((acc, each) => {
+      const qb = knex.raw(`REPLACE(${escapeBindingPlaceholders(acc)}, ?, ?)`, [
+        each.key,
+        each.value,
+      ]);
+      return qb.toQuery();
+    }, knex.raw(`??`, [needleColumn]).toQuery());
+  }
+}
