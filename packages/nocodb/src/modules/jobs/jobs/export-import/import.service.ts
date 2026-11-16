@@ -30,7 +30,10 @@ import { getCustomLinkParam } from '~/helpers/linkHelpers';
 import { validateImportSchema } from '~/utils/modelUtils';
 import { RowColorViewHelpers } from '~/helpers/rowColorViewHelpers';
 import { sanitizeColumnName } from '~/helpers';
-import { sanitizeCommentBody } from '~/helpers/sanitizeCommentBody';
+import {
+  COMMENT_MAX_LENGTH,
+  sanitizeCommentBody,
+} from '~/helpers/sanitizeCommentBody';
 import { NcBaseError, NcBaseErrorv2, NcError } from '~/helpers/catchError';
 import { repairCopiedViewTitles } from '~/helpers/viewTitleHelpers';
 import {
@@ -476,7 +479,10 @@ export class ImportService {
           withoutId({
             ...commentD,
             attachments,
-            comment: sanitizeCommentBody(commentD.comment),
+            // Truncate rather than reject so one old long comment can't fail the import.
+            comment: sanitizeCommentBody(
+              String(commentD.comment ?? '').slice(0, COMMENT_MAX_LENGTH),
+            ),
             fk_model_id: table.id,
             parent_comment_id: idMap.get(commentD.parent_comment_id),
           }),
@@ -1986,6 +1992,7 @@ export class ImportService {
             case ViewTypes.GRID:
             case ViewTypes.TIMELINE:
             case ViewTypes.GANTT:
+            case ViewTypes.GALLERY:
               for (const cl of vwColumns) {
                 const fcl = view.columns.find(
                   (a) => a.fk_column_id === reverseGet(idMap, cl.fk_column_id),
@@ -2011,7 +2018,6 @@ export class ImportService {
                 });
               }
               break;
-            case ViewTypes.GALLERY:
             case ViewTypes.KANBAN:
             case ViewTypes.CALENDAR:
               break;

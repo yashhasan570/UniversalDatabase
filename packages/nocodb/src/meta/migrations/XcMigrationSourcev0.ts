@@ -138,6 +138,8 @@ import * as nc_202611061200_agents_scope from './v0/nc_202611061200_agents_scope
 import * as nc_202611062030_kanban_view_stack_summary from './v0/nc_202611062030_kanban_view_stack_summary';
 import * as nc_202611100742_subscriptions_price_switch from './v0/nc_202611100742_subscriptions_price_switch';
 import * as nc_202611111200_auth_token_hash from './v0/nc_202611111200_auth_token_hash';
+import * as nc_202611141200_automation_executions_triggered_by from './v0/nc_202611141200_automation_executions_triggered_by';
+import * as nc_202611131200_gallery_view_columns_group_by from './v0/nc_202611131200_gallery_view_columns_group_by';
 
 // Create a custom migration source class
 export default class XcMigrationSourcev0 {
@@ -287,6 +289,8 @@ export default class XcMigrationSourcev0 {
       'nc_202611062030_kanban_view_stack_summary',
       'nc_202611100742_subscriptions_price_switch',
       'nc_202611111200_auth_token_hash',
+      'nc_202611141200_automation_executions_triggered_by',
+      'nc_202611131200_gallery_view_columns_group_by',
     ]);
   }
 
@@ -576,6 +580,10 @@ export default class XcMigrationSourcev0 {
         return nc_202611100742_subscriptions_price_switch;
       case 'nc_202611111200_auth_token_hash':
         return nc_202611111200_auth_token_hash;
+      case 'nc_202611141200_automation_executions_triggered_by':
+        return nc_202611141200_automation_executions_triggered_by;
+      case 'nc_202611131200_gallery_view_columns_group_by':
+        return nc_202611131200_gallery_view_columns_group_by;
     }
   }
 }
