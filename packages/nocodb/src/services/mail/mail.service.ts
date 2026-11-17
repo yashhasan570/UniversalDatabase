@@ -309,6 +309,10 @@ export class MailService {
     return url;
   }
 
+  async isConfigured(ncMeta = UniversalDatabase.ncMeta): Promise<boolean> {
+    return !!(await this.getAdapter(ncMeta));
+  }
+
   async sendMailRaw(params: RawMailParams, ncMeta = UniversalDatabase.ncMeta) {
     const mailerAdapter = await this.getAdapter(ncMeta);
     if (!mailerAdapter) {

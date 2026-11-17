@@ -167,7 +167,3 @@ Thank you for your contributions! We appreciate all the contributions from the c
 <a href="https://github.com/universaldatabase/universaldatabase/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=universaldatabase/universaldatabase" />
 </a>
-
-## Contact
-
-Questions, problem reports or feedback? Reach us on Telegram: [@johnconstantine570](https://t.me/johnconstantine570)
