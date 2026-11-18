@@ -259,7 +259,7 @@ class Tele {
       return null;
 
     // Lazy import to avoid circular dependency — UniversalDatabase is not available at module load time
-    const { default: UniversalDatabase = await import('~/UniversalDatabase');
+    const { default: UniversalDatabase } = await import('~/UniversalDatabase');
     if (UniversalDatabase.isEE()) return null;
 
     const payload: Record<string, any> = {

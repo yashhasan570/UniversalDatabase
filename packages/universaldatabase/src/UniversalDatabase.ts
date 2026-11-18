@@ -40,7 +40,7 @@ if (process.env.NODE_ENV === 'development') {
   require('source-map-support').install();
 }
 
-export default UniversalDatabase {
+export default class UniversalDatabase {
   protected static _this: UniversalDatabase;
   protected static ee: boolean;
   public static readonly env: string = '_noco';

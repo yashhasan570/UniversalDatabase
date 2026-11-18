@@ -32,8 +32,6 @@ def sweep(t):
     # Identifier-safe token replacements (no spaces: code must stay valid)
     t = re.sub(r"NocoDB(?=[A-Za-z0-9_])", "UniversalDatabase", t)
     t = re.sub(r"\bNocoDB\b", "UniversalDatabase", t)
-    t = re.sub(r"\bNoco\.(?=[a-zA-Z_])", "UniversalDatabaseObj.", t)
-    t = re.sub(r"new\s+Noco\b|class\s+Noco\b|import\s*\{\s*Noco\b|\{\s*Noco[,}]|\bNoco\s*\}", "UniversalDatabaseObjX", t)
     t = t.replace("nocodb", "universaldatabase")
     t = re.sub(r"\bnoco\b", "universaldatabase", t)
     t = re.sub(r"\bNoco\b", "UniversalDatabase", t)
