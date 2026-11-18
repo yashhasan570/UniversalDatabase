@@ -4,11 +4,17 @@
 Protected anchors (kept intact on every run):
 - LICENSE.md files (legal, untouched)
 - .github/ and scripts/ are excluded from the sweep entirely
+
+Identifier safety: NocoDB/Noco become single-token identifiers
+("UniversalDatabase", "universaldatabase") in CODE. Spaced display
+wording ("Universal Database") is applied ONLY to user-visible files
+(markdown, i18n lang files, index.html).
 """
 from pathlib import Path
 import re, shutil
 
-SKIP_EXT = {".png",".jpg",".jpeg",".ico",".webp",".woff",".woff2",".ttf",".eot",".otf",".gif",".pdf",".gz",".zip",".mp4"}
+SKIP_EXT = {"B.png",".jpg",".jpeg",".ico",".webp",".woff",".woff2",".ttf",".eot",".otf",".gif",".pdf",".gz",".zip",".mp4"}
+SKIP_EXT.discard("B.png")
 KEEP = {"LICENSE.md", "migrate.py"}
 PAIRS = [
  ("NOCODB_", "UNIVERSALDATABASE_"),
@@ -23,22 +29,41 @@ VALFIX = [("UniversalDatabaseDB","Universal Database"),("Universal DatabaseDB","
 def sweep(t):
     for a, b in PAIRS:
         t = t.replace(a, b)
-    t = re.sub(r"NocoDB(?=[A-Za-z])", "UniversalDatabase", t)
-    t = re.sub(r"Noco(?=[A-Z])", "UniversalDatabase", t)
-    t = t.replace("nocodb", "universaldatabase")
+    # Identifier-safe token replacements (no spaces: code must stay valid)
+    t = re.sub(r"NocoDB(?=[A-Za-z0-9_])", "UniversalDatabase", t)
+    t = re.sub(r"\bNocoDB\b", "UniversalDatabase", t)
     t = re.sub(r"\bNoco\.(?=[a-zA-Z_])", "UniversalDatabaseObj.", t)
     t = re.sub(r"new\s+Noco\b|class\s+Noco\b|import\s*\{\s*Noco\b|\{\s*Noco[,}]|\bNoco\s*\}", "UniversalDatabaseObjX", t)
+    t = t.replace("nocodb", "universaldatabase")
     t = re.sub(r"\bnoco\b", "universaldatabase", t)
-    t = re.sub(r"\bNoco\b", "Universal Database", t)
+    t = re.sub(r"\bNoco\b", "UniversalDatabase", t)
     t = t.replace("UniversalDatabaseObjX", "UniversalDatabase").replace("UniversalDatabaseObj.", "UniversalDatabase.")
     return t
 
 
 def display(t):
+    t = sweep(t)
     t = t.replace("UniversalDatabase", "Universal Database")
     for a, b in VALFIX:
         t = t.replace(a, b)
     return t
+
+
+def rename_paths():
+    # Files first, then dirs deepest-first so children keep valid paths
+    for p in sorted(list(Path(".").rglob("*"))):
+        if ".git" in p.parts or p.is_dir():
+            continue
+        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
+        if nb != p.name:
+            p.rename(p.with_name(nb))
+    dirs = sorted([p for p in Path(".").rglob("*") if ".git" not in p.parts and p.is_dir()
+                   and ("nocodb" in p.name or "Noco" in p.name)],
+                  key=lambda p: len(p.parts), reverse=True)
+    for p in dirs:
+        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
+        if nb != p.name:
+            p.rename(p.with_name(nb))
 
 
 def main():
@@ -64,16 +89,9 @@ def main():
             if "/lang/" in str(p):
                 nt = re.sub(r'"([^"]*Universal Database[^"]*)"(?=\s*:)',
                             lambda m: '"' + m.group(1).replace(" ", "") + '"', nt)
-        for a, b in VALFIX:
-            nt = nt.replace(a, b)
         if nt != t:
             p.write_text(nt)
-    for p in list(Path(".").rglob("*nocodb*")) + list(Path(".").rglob("*Noco*")):
-        if ".git" in p.parts or p.is_dir():
-            continue
-        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
-        if nb != p.name:
-            p.rename(p.with_name(nb))
+    rename_paths()
     readme = Path("README.md")
     if readme.exists() and not readme.read_text().startswith("# Universal Database"):
         print("README drifted - rewrite needed")
