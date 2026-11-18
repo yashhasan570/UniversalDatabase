@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import dayjs from 'dayjs'
-import { hasDateOverflow, isDateMonthFormat, isSystemColumn, parseDateWithFormat } from 'universaldatabase-sdk'
+import { hasDateOverflow, isDateMonthFormat, isSystemColumn, parseDateWithFormat, parseStoredDate } from 'universaldatabase-sdk'
 import { parseFlexibleDate } from '~/utils/datetimeUtils'
 
 interface Props {
@@ -73,7 +73,7 @@ const localState = computed({
 
     const format = picker.value === 'month' ? dateFormat : 'YYYY-MM-DD'
 
-    const value = dayjs(/^\d+$/.test(modelValue) ? +modelValue : modelValue, format)
+    const value = parseStoredDate(modelValue, format)
 
     return value
   },

@@ -23,7 +23,11 @@ import {
   isVirtualCol,
   ncIsArray,
   ncIsNumber,
+  parseDecimalValue,
+  parseIntValue,
+  parseProp,
   resolveCurrentUserToken,
+  restoreEarlyYear,
   getLookupColumnType as sdkGetLookupColumnType,
   validateRowFilters as sdkValidateRowFilters,
   timeFormats,
@@ -40,7 +44,7 @@ import type {
 } from 'universaldatabase-sdk'
 import dayjs from 'dayjs'
 import { decode as decodeHtmlEntities } from 'html-entities'
-import { isColumnRequiredAndNull } from './columnUtils'
+import { isColumnRequiredAndNull, isReadonlyDataCol } from './columnUtils'
 import { parseFlexibleDate } from '~/utils/datetimeUtils'
 import type { GetMetaParams } from '~/composables/useMetas'
 
@@ -160,6 +164,206 @@ export function computeLtarNewRowState(
   }
 }
 
+/** The link's foreign key is on the row itself, so the linked record has to exist before the row. */
+export function isLtarFkOnRow(column: ColumnType | null | undefined): boolean {
+  if (!column || isLinkV2(column)) return false
+  const type = (column.colOptions as LinkToAnotherRecordType | undefined)?.type
+  return type === RelationTypes.BELONGS_TO || (type === RelationTypes.ONE_TO_ONE && !!parseProp(column.meta)?.bt)
+}
+
+/**
+ * Split a new row's buffered links into links to existing records and blueprints (records
+ * to create once the row exists). A column holding blueprints maps to the remaining links,
+ * or `undefined`, so spreading `links` over the row payload drops them.
+ */
+export function splitLtarBlueprints(ltarState: Record<string, any> | null | undefined) {
+  const links: Record<string, any> = {}
+  const blueprints: Record<string, Record<string, any>[]> = {}
+
+  for (const [title, value] of Object.entries(ltarState ?? {})) {
+    const items = Array.isArray(value) ? value : [value]
+    const pending = items.filter((item) => item?._isBlueprint)
+    if (!pending.length) {
+      links[title] = value
+      continue
+    }
+    blueprints[title] = pending
+    links[title] = Array.isArray(value) ? value.filter((item) => !item?._isBlueprint) : undefined
+  }
+
+  return { links, blueprints }
+}
+
+type LtarBlueprints = Record<string, Record<string, any>[]>
+
+/** The link column and related table a blueprint is created in; throws when either is missing. */
+async function resolveBlueprintTarget(
+  meta: TableType,
+  title: string,
+  getMeta: (params: GetMetaParams) => Promise<TableType | null>,
+) {
+  const column = meta.columns?.find((c) => c.title === title)
+  const colOptions = column?.colOptions as LinkToAnotherRecordType | undefined
+  const relatedMeta =
+    column && colOptions?.fk_related_model_id
+      ? await getMeta({ baseId: colOptions.fk_related_base_id || meta.base_id!, tableIdOrTitle: colOptions.fk_related_model_id })
+      : null
+  if (!column || !relatedMeta)
+    throw new Error(`Records linked in "${title}" could not be created: the linked table is unavailable`)
+  return { column, relatedMeta }
+}
+
+/** Insert payload for one blueprint, linked back to `record`, and the blueprints nested in it. */
+async function prepareBlueprint(
+  { column, relatedMeta }: { column: ColumnType; relatedMeta: TableType },
+  meta: TableType,
+  record: Record<string, any>,
+  blueprint: Record<string, any>,
+  getMeta: (params: GetMetaParams) => Promise<TableType | null>,
+) {
+  const { _isBlueprint, _ltarState, ...row } = blueprint
+  const nested = splitLtarBlueprints(_ltarState)
+  const linkState = { ...nested.links, ...computeLtarNewRowState(column, relatedMeta, meta.id, record, false) }
+  const { insertObj, missingRequiredColumns } = await populateInsertObject({
+    meta: relatedMeta,
+    ltarState: linkState,
+    getMeta,
+    row,
+  })
+  // Link values copied from the row are display mirrors; the buffered state is what links.
+  for (const col of relatedMeta.columns ?? []) if (isLinksOrLTAR(col)) delete insertObj[col.title!]
+
+  return { payload: { ...insertObj, ...linkState }, missingRequiredColumns, nestedBlueprints: nested.blueprints }
+}
+
+/**
+ * Check the blueprints buffered on a new row before the row is saved: each linked table must be
+ * available and each record must have its required fields. Throws with every problem found.
+ */
+export async function validateLtarBlueprints({
+  meta,
+  blueprints,
+  getMeta,
+}: {
+  meta: TableType
+  blueprints: LtarBlueprints
+  getMeta: (params: GetMetaParams) => Promise<TableType | null>
+}): Promise<void> {
+  const problems: string[] = []
+
+  const visit = async (parentMeta: TableType, parentBlueprints: LtarBlueprints) => {
+    // Stands in for the unsaved row, so a foreign key derived from it isn't reported missing.
+    const placeholder = Object.fromEntries((parentMeta.columns ?? []).map((c) => [c.title!, '__nc_pending__']))
+
+    for (const [title, items] of Object.entries(parentBlueprints)) {
+      let target
+      try {
+        target = await resolveBlueprintTarget(parentMeta, title, getMeta)
+      } catch (e: any) {
+        problems.push(e.message)
+        continue
+      }
+
+      for (const blueprint of items) {
+        const { missingRequiredColumns, nestedBlueprints } = await prepareBlueprint(
+          target,
+          parentMeta,
+          placeholder,
+          blueprint,
+          getMeta,
+        )
+        if (missingRequiredColumns.size) {
+          problems.push(
+            `${target.relatedMeta.title || title}: missing required field(s) ${[...missingRequiredColumns].join(', ')}`,
+          )
+        }
+        await visit(target.relatedMeta, nestedBlueprints)
+      }
+    }
+  }
+
+  await visit(meta, blueprints)
+
+  if (problems.length) throw new Error(problems.join('; '))
+}
+
+/** A blueprint whose record could not be created; `record` is its display value, if any. */
+export interface LtarBlueprintError {
+  table: string
+  record: string
+  error: unknown
+}
+
+/** How the user would recognise a blueprint: its display value. */
+function blueprintLabel(relatedMeta: TableType | null, blueprint: Record<string, any>) {
+  const pv = relatedMeta?.columns?.find((c) => c.pv)
+  const value = pv ? blueprint[pv.title!] : undefined
+  return value !== null && value !== undefined && value !== '' ? String(value) : ''
+}
+
+/**
+ * Create the blueprints buffered on a row, each linked back to the now saved `record`.
+ * Returns the records created per link column, every error, and the top-level blueprints that
+ * failed, with their data, so they can be kept on the row for a retry. A nested blueprint that fails is only reported: the record it
+ * belongs to now exists, so it can be added from that record.
+ */
+export async function createLtarBlueprints({
+  meta,
+  record,
+  blueprints,
+  getMeta,
+  createRecord,
+}: {
+  meta: TableType
+  record: Record<string, any>
+  blueprints: LtarBlueprints
+  getMeta: (params: GetMetaParams) => Promise<TableType | null>
+  createRecord: (meta: TableType, data: Record<string, any>) => Promise<Record<string, any>>
+}): Promise<{ created: LtarBlueprints; errors: LtarBlueprintError[]; failed: LtarBlueprints }> {
+  const created: LtarBlueprints = {}
+  const errors: LtarBlueprintError[] = []
+  const failed: LtarBlueprints = {}
+
+  for (const [title, items] of Object.entries(blueprints)) {
+    let target
+    try {
+      target = await resolveBlueprintTarget(meta, title, getMeta)
+    } catch (error) {
+      for (const blueprint of items) errors.push({ table: title, record: blueprintLabel(null, blueprint), error })
+      failed[title] = [...items]
+      continue
+    }
+
+    const table = target.relatedMeta.title || title
+
+    for (const blueprint of items) {
+      let createdRecord
+      let nestedBlueprints: LtarBlueprints
+      try {
+        const prepared = await prepareBlueprint(target, meta, record, blueprint, getMeta)
+        nestedBlueprints = prepared.nestedBlueprints
+        createdRecord = await createRecord(target.relatedMeta, prepared.payload)
+        ;(created[title] ??= []).push(createdRecord)
+      } catch (error) {
+        errors.push({ table, record: blueprintLabel(target.relatedMeta, blueprint), error })
+        ;(failed[title] ??= []).push(blueprint)
+        continue
+      }
+
+      const nested = await createLtarBlueprints({
+        meta: target.relatedMeta,
+        record: createdRecord,
+        blueprints: nestedBlueprints,
+        getMeta,
+        createRecord,
+      })
+      errors.push(...nested.errors)
+    }
+  }
+
+  return { created, errors, failed }
+}
+
 // a function to populate insert object and verify if all required fields are present
 export async function populateInsertObject({
   getMeta,
@@ -195,15 +399,14 @@ export async function populateInsertObject({
   const linkedFkTitles = new Set<string>()
 
   for (const col of meta.columns) {
-    if (
-      !ltarState ||
-      col.uidt !== UITypes.LinkToAnotherRecord ||
-      (<LinkToAnotherRecordType>col.colOptions)?.type !== RelationTypes.BELONGS_TO
-    ) {
+    // Belongs-to, and the one-to-one side that holds the foreign key
+    if (!ltarState || col.uidt !== UITypes.LinkToAnotherRecord || !isLtarFkOnRow(col)) {
       continue
     }
 
-    const ltarVal = ltarState[col.title!] || row?.[col.title!]
+    const linked = ltarState[col.title!] || row?.[col.title!]
+    // A one-to-one link can arrive as a one-record list
+    const ltarVal = Array.isArray(linked) ? linked[0] : linked
     if (!ltarVal) continue
 
     const colOpt = <LinkToAnotherRecordType>col.colOptions
@@ -289,6 +492,8 @@ export const getSkippedDuplicateLinks = (row: Record<string, any> = {}, columns:
 //    auto-increment, default or auto-generated value) would be copied verbatim
 //    and the insert would fail on the unique constraint, so leave it for the
 //    user to fill in
+//  - readonly columns: the database computes them (e.g. PG generated columns)
+//    and the backend rejects a written value
 //  - single-parent links (has-many / one-to-one / one-to-many) — copying them
 //    would reassign the linked record to the copy and detach it from the
 //    original (see `isSingleParentLinkColumn`). Shareable links (belongs-to /
@@ -313,7 +518,10 @@ export const getDuplicateRowData = (
   delete clonedRow.ncRecordHash
 
   for (const col of columns) {
-    if (col.title && (isSystemColumn(col) || col.pk || (!keepSingleParentLinks && isSingleParentLinkColumn(col)))) {
+    if (
+      col.title &&
+      (isSystemColumn(col) || col.pk || isReadonlyDataCol(col) || (!keepSingleParentLinks && isSingleParentLinkColumn(col)))
+    ) {
       delete clonedRow[col.title]
     }
   }
@@ -434,7 +642,9 @@ export const getDateValue = (modelValue: string | null | number, col: ColumnType
       return parsedDate.format(dateFormat) as string
     }
   } else {
-    return dayjs(/^\d+$/.test(String(modelValue)) ? +modelValue : modelValue).format(dateFormat)
+    return restoreEarlyYear(dayjs(/^\d+$/.test(String(modelValue)) ? +modelValue : modelValue), String(modelValue)).format(
+      dateFormat,
+    )
   }
 
   return ''
@@ -557,20 +767,32 @@ export const getUserValue = (modelValue: string | string[] | null | Array<any>, 
   }
 }
 
-export const getDecimalValue = (modelValue: string | null | number, col: ColumnType) => {
+export const getDecimalValue = (
+  modelValue: string | null | number,
+  col: ColumnType,
+  options?: ParsePlainCellValueProps['params']['numberFormat'],
+) => {
   if ((!ncIsNumber(modelValue) && !modelValue) || isNaN(Number(modelValue))) {
     return ''
   }
-  const columnMeta = parseProp(col.meta)
 
-  return Number(modelValue).toFixed(columnMeta?.precision ?? 1)
+  // Raw value for templates: '.' decimal point whatever the field's separator
+  if (options?.skipThousandSeparator) {
+    return Number(modelValue).toFixed(parseProp(col.meta)?.precision ?? 1)
+  }
+
+  return `${parseDecimalValue(modelValue, col, options) ?? ''}`
 }
 
-export const getIntValue = (modelValue: string | null | number) => {
+export const getIntValue = (
+  modelValue: string | null | number,
+  col?: ColumnType,
+  options?: ParsePlainCellValueProps['params']['numberFormat'],
+) => {
   if ((!ncIsNumber(modelValue) && !modelValue) || isNaN(Number(modelValue))) {
     return ''
   }
-  return Number(modelValue).toString()
+  return `${parseIntValue(modelValue, col, options) ?? ''}`
 }
 
 export const getTextAreaValue = (modelValue: string | null, col: ColumnType) => {
@@ -751,7 +973,7 @@ export const parsePlainCellValue = (
   value: ParsePlainCellValueProps['value'],
   params: ParsePlainCellValueProps['params'],
 ): string => {
-  const { col, abstractType, isUnderLookup } = params
+  const { col, abstractType, isUnderLookup, numberFormat } = params
 
   if (!col) {
     return ''
@@ -799,14 +1021,14 @@ export const parsePlainCellValue = (
     return getUserValue(value, params)
   }
   if (isDecimal(col)) {
-    return getDecimalValue(value, col)
+    return getDecimalValue(value, col, numberFormat)
   }
   if (isRating(col)) {
     return value ? `${value}` : '0'
   }
 
-  if (isInt(col, abstractType)) {
-    return getIntValue(value)
+  if (col.uidt === UITypes.Number || isInt(col, abstractType)) {
+    return getIntValue(value, col, numberFormat)
   }
   if (isJSON(col)) {
     try {
