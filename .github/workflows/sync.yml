@@ -18,7 +18,7 @@ jobs:
           cp -a .github /tmp/keep.github
           cp -a scripts /tmp/keep.scripts
           find . -mindepth 1 -maxdepth 1 -not -name .git -exec rm -rf {} +
-          rsync -a /tmp/upstream/ ./
+          rsync -a --exclude .git /tmp/upstream/ ./
           rm -rf /tmp/upstream .github scripts
           cp -a /tmp/keep.github .github
           cp -a /tmp/keep.scripts scripts
