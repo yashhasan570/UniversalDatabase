@@ -7,6 +7,7 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc tsconfig.json ./
 COPY packages ./packages
 COPY scripts ./scripts
+COPY .github/docker/make-docker-config.js .github/docker/make-docker-config.js
 RUN sed -i '/^use-node-version/d' .npmrc
 ENV NODE_OPTIONS=--max-old-space-size=8192
 RUN pnpm --filter=universaldatabase-sdk install && pnpm --filter=universaldatabase-sdk run build
