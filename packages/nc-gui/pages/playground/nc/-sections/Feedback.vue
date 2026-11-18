@@ -7,7 +7,7 @@ const ALERT_TYPES = ['info', 'success', 'warning', 'error'] as const
 const PLACEMENTS = ['topLeft', 'top', 'topRight', 'left', 'right', 'bottomLeft', 'bottom', 'bottomRight'] as const
 
 const ALERT_COPY: Record<(typeof ALERT_TYPES)[number], { message: string; description: string }> = {
-  info: { message: 'Scheduled maintenance', description: 'Universal Database Cloud will be read-only on Sunday from 02:00 to 02:30 UTC.' },
+  info: { message: 'Scheduled maintenance', description: 'UniversalDatabase Cloud will be read-only on Sunday from 02:00 to 02:30 UTC.' },
   success: { message: 'Webhook delivered', description: 'The payload reached https://hooks.acme.dev in 184 ms.' },
   warning: { message: 'Approaching record limit', description: 'This workspace has used 92% of its 50,000 records.' },
   error: { message: 'Formula error', description: 'Unknown field {Budgett} — did you mean {Budget}?' },

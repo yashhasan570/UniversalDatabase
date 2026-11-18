@@ -96,7 +96,7 @@ const isDeleteAllRecordsModalOpen = ref(false)
 
 // Composables
 const { isDataReadOnly, isUIAllowed } = useRoles()
-const { aiIntegrations } = useUniversalDatabaseAi()
+const { aiIntegrations } = useNocoAi()
 const { isAiRecordContextEnabled, setAiRecordContext } = useAiRecordContext()
 const { appInfo, isMobileMode } = useGlobal()
 const { paste } = usePaste()

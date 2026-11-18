@@ -1,0 +1,190 @@
+import { Injectable } from '@nestjs/common';
+import { AppEvents, UITypes, ViewTypes } from 'universaldatabase-sdk';
+import type { MapUpdateReqType, UserType, ViewCreateReqType } from 'universaldatabase-sdk';
+import type { NcRequest } from '~/interface/config';
+import { NcContext } from '~/interface/config';
+import NocoCache from '~/cache/NocoCache';
+import { validatePayload } from '~/helpers';
+import { assertPersonalViewAllowed } from '~/helpers/checkPersonalViewFeature';
+import { assertNotLaneInstance } from '~/helpers/environmentGuards';
+import { NcError } from '~/helpers/catchError';
+import { assertViewConfigEditable } from '~/helpers/viewLockHelpers';
+import { claimObjectTitle } from '~/helpers/customObjects';
+import { normalizeViewTitle } from '~/helpers/viewTitleHelpers';
+import { Column, MapView, Model, User, View } from '~/models';
+import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import { CacheScope } from '~/utils/globals';
+import { TraceCommand } from '~/decorators/trace-command.decorator';
+import { OperationName } from '~/command-registry/op-names';
+import UniversalDatabase from '~/UniversalDatabase';
+
+@Injectable()
+export class MapsService {
+  constructor(private readonly appHooksService: AppHooksService) {}
+
+  async mapViewGet(context: NcContext, param: { mapViewId: string }) {
+    return await MapView.get(context, param.mapViewId);
+  }
+
+  // Same rule as the create dialog: a map plots GeoData fields only.
+  protected async assertGeoDataColumn(
+    context: NcContext,
+    tableId: string,
+    columnId: string | null | undefined,
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    if (!columnId) return;
+    const column = await Column.get(context, { colId: columnId }, ncMeta);
+    if (!column || column.fk_model_id !== tableId) {
+      NcError.get(context).fieldNotFound(columnId);
+    }
+    if (column.uidt !== UITypes.GeoData) {
+      NcError.get(context).invalidRequestBody(
+        `Map view requires a GeoData field; '${column.title}' is ${column.uidt}`,
+      );
+    }
+  }
+
+  @TraceCommand(OperationName.mapViewCreate)
+  async mapViewCreate(
+    context: NcContext,
+    param: {
+      tableId: string;
+      map: ViewCreateReqType;
+      user: UserType;
+      ownedBy?: string;
+      req: NcRequest;
+    },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    if (param?.ownedBy) {
+      await assertNotLaneInstance(
+        context,
+        'Personal views cannot be created in an environment instance. Create them on the production base.',
+      );
+    }
+
+    validatePayload(
+      'swagger.json#/components/schemas/ViewCreateReq',
+      param.map,
+    );
+
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked();
+    }
+
+    await assertPersonalViewAllowed(context, param.map.lock_type);
+
+    const model = await Model.get(context, param.tableId, false, ncMeta);
+
+    param.map.title = normalizeViewTitle(context, param.map.title);
+
+    await this.assertGeoDataColumn(
+      context,
+      param.tableId,
+      param.map.fk_geo_data_col_id,
+      ncMeta,
+    );
+
+    param.map.title = await claimObjectTitle(context, 'view', param.map.title, {
+      baseId: model.base_id,
+      insideTable: model.table_name,
+      ncMeta,
+    });
+
+    const { id } = await View.insertMetaOnly(
+      context,
+      {
+        view: {
+          ...param.map,
+          // todo: sanitize
+          fk_model_id: param.tableId,
+          type: ViewTypes.MAP,
+          base_id: model.base_id,
+          source_id: model.source_id,
+          created_by: param.user?.id,
+          owned_by: param.ownedBy || param.user?.id,
+        },
+        model,
+        req: param.req,
+      },
+      ncMeta,
+    );
+
+    // populate  cache and add to list since the list cache already exist
+    const view = await View.get(context, id, false, ncMeta);
+    await NocoCache.appendToList(
+      context,
+      CacheScope.VIEW,
+      [view.fk_model_id],
+      `${CacheScope.VIEW}:${id}`,
+    );
+
+    let owner = param.req.user;
+
+    if (param.ownedBy) {
+      owner = await User.get(param.ownedBy, ncMeta);
+    }
+
+    this.appHooksService.emit(AppEvents.MAP_CREATE, {
+      view,
+      req: param.req,
+      owner,
+      context,
+    });
+
+    return view;
+  }
+
+  @TraceCommand(OperationName.mapViewUpdate)
+  async mapViewUpdate(
+    context: NcContext,
+    param: {
+      mapViewId: string;
+      map: MapUpdateReqType;
+      req: NcRequest;
+    },
+    ncMeta = UniversalDatabase.ncMeta,
+  ) {
+    validatePayload('swagger.json#/components/schemas/MapUpdateReq', param.map);
+
+    const view = await View.get(context, param.mapViewId, false, ncMeta);
+
+    if (!view) {
+      NcError.get(context).viewNotFound(param.mapViewId);
+    }
+    assertViewConfigEditable(context, view, param.req);
+
+    await this.assertGeoDataColumn(
+      context,
+      view.fk_model_id,
+      param.map.fk_geo_data_col_id,
+      ncMeta,
+    );
+
+    const oldMapView = await MapView.get(context, param.mapViewId, ncMeta);
+
+    await MapView.update(context, param.mapViewId, param.map, ncMeta);
+
+    let owner = param.req.user;
+
+    if (view.owned_by && view.owned_by !== param.req.user?.id) {
+      owner = await User.get(view.owned_by);
+    }
+
+    this.appHooksService.emit(AppEvents.MAP_UPDATE, {
+      view: { ...view, ...param.map },
+      mapView: param.map,
+      oldMapView,
+      oldView: view,
+      req: param.req,
+      context,
+      owner,
+    });
+
+    await view.getView(ncMeta);
+
+    // Strip the stored bcrypt password hash from the outbound response.
+    return View.maskPasswordForResponse(view);
+  }
+}

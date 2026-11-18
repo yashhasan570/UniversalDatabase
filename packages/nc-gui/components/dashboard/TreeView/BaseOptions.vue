@@ -9,7 +9,7 @@ const props = withDefaults(
     titleClass?: string
     submenuClass?: string
     showLabel?: boolean
-    showUniversalDatabaseDbImport?: boolean
+    showNocoDbImport?: boolean
     popupOffset?: [number, number]
     showSourceSelector?: boolean
   }>(),
@@ -18,7 +18,7 @@ const props = withDefaults(
     titleClass: '',
     submenuClass: '',
     showLabel: false,
-    showUniversalDatabaseDbImport: false,
+    showNocoDbImport: false,
     showSourceSelector: true,
   },
 )

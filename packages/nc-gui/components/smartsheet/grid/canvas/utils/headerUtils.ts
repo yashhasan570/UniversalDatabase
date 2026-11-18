@@ -144,7 +144,7 @@ export function getCustomColumnTooltip({
     // MM table is always in the same base as the related table
     const mmMeta = getMetaByKey(relatedBaseId, relOptions.fk_mm_model_id)
     if (mmMeta) {
-      // skip if created by Universal Database
+      // skip if created by UniversalDatabase
       mmTable = mmMeta?.title?.includes('nc_m2m_') ? null : mmMeta
     } else {
       // if metas not found in store, fetch it with correct base_id

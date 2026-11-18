@@ -68,8 +68,8 @@ const COMMUNITY_LINKS = [
   { id: 'forum', titleKey: 'title.forum', icon: 'ncDiscordForum', outline: true, url: 'https://community.universaldatabase.com/' },
   { id: 'discord', title: 'Discord', icon: 'ncDiscord', url: 'https://discord.gg/c7GEYrvFtT' },
   { id: 'youtube', titleKey: 'general.youtube', icon: 'ncYoutube', outline: true, url: 'https://www.youtube.com/@universaldatabase' },
-  { id: 'twitter', title: 'X (Twitter)', icon: 'ncTwitter', url: 'https://twitter.com/Universal Database' },
-  { id: 'reddit', title: 'Reddit', icon: 'ncReddit', url: 'https://www.reddit.com/r/Universal Database/' },
+  { id: 'twitter', title: 'X (Twitter)', icon: 'ncTwitter', url: 'https://twitter.com/UniversalDatabase' },
+  { id: 'reddit', title: 'Reddit', icon: 'ncReddit', url: 'https://www.reddit.com/r/UniversalDatabase/' },
 ]
 
 // The Help menu's API reference submenu (MiniSidebar/Help.vue).

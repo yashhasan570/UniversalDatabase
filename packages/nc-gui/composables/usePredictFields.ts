@@ -18,7 +18,7 @@ export const usePredictFields = createSharedComposable(
 
     const { t } = useI18n()
 
-    const { aiError, predictNextFields: _predictNextFields, predictNextFormulas, predictNextButtons } = useUniversalDatabaseAi()
+    const { aiError, predictNextFields: _predictNextFields, predictNextFormulas, predictNextButtons } = useNocoAi()
 
     const { meta, view } = useSmartsheetStoreOrThrow()
 

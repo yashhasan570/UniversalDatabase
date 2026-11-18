@@ -41,7 +41,7 @@ export type ModelCapability = 'text' | 'vision' | 'tools' | 'image-generation';
 
 /**
  * System AI activity — lets an integration route different activities to
- * different models (the Universal Database-managed integration maps these via its
+ * different models (the UniversalDatabase-managed integration maps these via its
  * `activities` config; every other provider ignores them).
  *
  * NOTE: features where the user explicitly picks an integration AND a model
@@ -392,7 +392,7 @@ export abstract class AiIntegration<
    * CREDENTIAL_MASK. Unlike auth integrations (where the credential shape is
    * per-provider and masking is abstract), an AI provider's credential is a
    * plain top-level key, so this default covers every package but the
-   * Universal Database-managed aggregator. Hosts run configs through this before
+   * UniversalDatabase-managed aggregator. Hosts run configs through this before
    * serialising them into any API response and restore echoed sentinels from
    * the stored config on update — never persist the result.
    */
@@ -427,7 +427,7 @@ export abstract class AiIntegration<
   /**
    * Resolve the full model-selection args to a concrete provider model id.
    * Default ignores `useCase` and delegates to {@link resolveModelId} — only
-   * integrations that route activities to different models (the Universal Database-managed
+   * integrations that route activities to different models (the UniversalDatabase-managed
    * integration) override this.
    */
   protected resolveModel(args?: AiGetModelArgs): string {
@@ -472,7 +472,7 @@ export abstract class AiIntegration<
    * The model reference this integration would resolve `args` to, as it should be
    * *reported* — not necessarily what the provider is handed.
    *
-   * These differ for the Universal Database-managed integration: it resolves `<provider>/<modelId>`
+   * These differ for the UniversalDatabase-managed integration: it resolves `<provider>/<modelId>`
    * and then hands the delegate only the bare `<modelId>`, so `LanguageModel.modelId`
    * loses the namespace. Billing keys its rate table on the qualified ref, so usage must
    * be reported from here rather than off the returned model.

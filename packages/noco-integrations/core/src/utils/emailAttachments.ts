@@ -44,7 +44,7 @@ const HTTP_URL_RE = /^https?:\/\/\S+$/i;
 function isAttachmentFile(value: Record<string, unknown>): boolean {
   if (typeof value.path === 'string' && value.path) return true;
   if (typeof value.url !== 'string' || !value.url) return false;
-  // A Universal Database attachment carries cell metadata; a bare `{ url }` is just a link.
+  // A UniversalDatabase attachment carries cell metadata; a bare `{ url }` is just a link.
   return 'title' in value || 'mimetype' in value || 'size' in value;
 }
 
@@ -92,7 +92,7 @@ function collectString(
 /**
  * Flattens whatever interpolation left in an Attachments config into sources.
  *
- * Accepts the editor's typed items (`variable` / `file` / `url`), raw Universal Database
+ * Accepts the editor's typed items (`variable` / `file` / `url`), raw UniversalDatabase
  * attachment arrays (a `variable` item's expression resolves to one), nested
  * arrays from list-node outputs and comma-joined URLs.
  * Duplicates (same path / url) are dropped.
@@ -230,7 +230,7 @@ const PLATFORM_MAILER_BLOCKED_TYPES = new Set([
 ]);
 
 /**
- * The platform mailer sends from Universal Database's own domain, so it refuses files that
+ * The platform mailer sends from UniversalDatabase's own domain, so it refuses files that
  * run or render as a page. Senders using their own account (SMTP, Gmail,
  * Outlook) are not limited.
  */

@@ -1,9 +1,9 @@
 import { createI18n } from 'vue-i18n'
 import { isClient } from '@vueuse/core'
 
-let globalI18n: UniversalDatabaseI18n
+let globalI18n: NocoI18n
 
-export const createI18nPlugin = async (): Promise<UniversalDatabaseI18n> =>
+export const createI18nPlugin = async (): Promise<NocoI18n> =>
   createI18n({
     locale: 'en', // Set the initial locale
 
@@ -32,7 +32,7 @@ export async function setI18nLanguage(locale: keyof typeof Language, i18n = glob
 
 export async function loadLocaleMessages(
   locale: keyof typeof Language | keyof typeof LanguageAlias,
-  i18n: UniversalDatabaseI18n = globalI18n,
+  i18n: NocoI18n = globalI18n,
 ) {
   if (Object.keys(LanguageAlias).includes(locale)) locale = LanguageAlias[locale as keyof typeof LanguageAlias]
 

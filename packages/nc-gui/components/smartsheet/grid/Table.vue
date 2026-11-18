@@ -132,7 +132,7 @@ const {
   predictedNextFormulas,
   predictNextColumn,
   predictNextFormulas,
-} = useUniversalDatabaseEe().table
+} = useNocoEe().table
 
 const { paste } = usePaste()
 
@@ -179,7 +179,7 @@ const { onLeft, onRight, onUp, onDown } = usePaginationShortcuts({
   isViewDataLoading,
 })
 
-const { generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useUniversalDatabaseAi()
+const { generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useNocoAi()
 
 // #Variables
 const addColumnDropdown = ref(false)

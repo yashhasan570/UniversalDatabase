@@ -24,7 +24,7 @@ const { loadViews, onOpenViewCreateModal } = viewsStore
 const { isListViewEnabled } = storeToRefs(viewsStore)
 const { showUpgradeToUseListView } = viewsStore
 
-const { isAiFeaturesEnabled } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled } = useNocoAi()
 
 const {
   blockListView,
@@ -363,7 +363,7 @@ watch(isOpen, (val) => {
               <div class="item">
                 <div class="item-inner">
                   <GeneralIcon icon="ncAutoAwesome" class="!w-4 !h-4 text-nc-fill-purple-dark" />
-                  <div>{{ $t('labels.useUniversalDatabaseAI') }}</div>
+                  <div>{{ $t('labels.useNocoAI') }}</div>
                 </div>
               </div>
             </NcMenuItem>

@@ -109,7 +109,7 @@ function iconExists(icon: string) {
     </div>
   </PgSection>
 
-  <PgSection id="brand" title="Brand marks" source="GeneralNocodbLogo · GeneralUniversalDatabaseIcon · GeneralAiSparkleHero">
+  <PgSection id="brand" title="Brand marks" source="GeneralNocodbLogo · GeneralNocoIcon · GeneralAiSparkleHero">
     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
       <PgDemo label="NocodbLogo" hint="mono in dark mode">
         <div class="flex items-center gap-4">
@@ -118,14 +118,14 @@ function iconExists(icon: string) {
           <GeneralNocodbLogo class="!h-10 !w-10" />
         </div>
       </PgDemo>
-      <PgDemo label="UniversalDatabaseIcon" hint="click to ping · animate while loading">
-        <!-- UniversalDatabaseIcon straddles its parent's top edge (top: -size/2) -->
+      <PgDemo label="NocoIcon" hint="click to ping · animate while loading">
+        <!-- NocoIcon straddles its parent's top edge (top: -size/2) -->
         <div class="flex items-end gap-4 pt-8">
           <div class="relative w-24 h-12 rounded-lg border-1 border-nc-border-gray-medium bg-nc-bg-gray-extralight">
-            <GeneralUniversalDatabaseIcon :size="48" />
+            <GeneralNocoIcon :size="48" />
           </div>
           <div class="relative w-28 h-12 rounded-lg border-1 border-nc-border-gray-medium bg-nc-bg-gray-extralight">
-            <GeneralUniversalDatabaseIcon :size="64" animate />
+            <GeneralNocoIcon :size="64" animate />
           </div>
         </div>
       </PgDemo>

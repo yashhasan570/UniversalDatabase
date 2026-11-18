@@ -18,7 +18,7 @@ export class IntegrationWrapper<T = any> {
   get config(): Readonly<T> {
     // Strip framework-injected non-persistable slots:
     //   - `_vars` : runtime variable bag, persisted separately via saveVars
-    //   - `_universaldatabase`: live Universal Database service handles + request context injected
+    //   - `_universaldatabase`: live UniversalDatabase service handles + request context injected
     //     into sync/workflow wrappers at runtime; not safe to JSON-serialise
     //     into the integration record.
     const { _vars, _universaldatabase, ...rest } = this._config as any;

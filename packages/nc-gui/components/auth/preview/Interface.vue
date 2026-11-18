@@ -70,7 +70,7 @@ function usd(value: number) {
       <div class="flex items-center gap-3 px-4 pt-4 pb-3">
         <span class="w-8 h-8 flex-none flex items-center justify-center rounded-lg border-1 border-white/30 bg-white/15">
           <span class="w-5 h-5 flex items-center justify-center rounded-[5px]" :class="isDark ? 'bg-[#16161a]' : 'bg-white'">
-            <GeneralUniversalDatabaseIcon inline :size="16" />
+            <GeneralNocoIcon inline :size="16" />
           </span>
         </span>
         <span class="truncate text-bodyBold">Sales CRM</span>

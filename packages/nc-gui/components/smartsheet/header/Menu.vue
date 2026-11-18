@@ -20,7 +20,7 @@ const meta = inject(MetaInj, ref())
 
 const { isUIAllowed } = useRoles()
 
-const { aiIntegrations, isUniversalDatabaseAiAvailable } = useUniversalDatabaseAi()
+const { aiIntegrations, isNocoAiAvailable } = useNocoAi()
 
 const columnInvalid = computed<{ isInvalid: boolean; tooltip: string }>(() => {
   if (!column?.value) {
@@ -34,7 +34,7 @@ const columnInvalid = computed<{ isInvalid: boolean; tooltip: string }>(() => {
     col: column.value,
     aiIntegrations: aiIntegrations.value,
     isReadOnly: isPublic.value || !isUIAllowed('dataEdit'),
-    isUniversalDatabaseAiAvailable: isUniversalDatabaseAiAvailable.value,
+    isNocoAiAvailable: isNocoAiAvailable.value,
     columns: meta.value?.columns as ColumnType[],
   })
 })

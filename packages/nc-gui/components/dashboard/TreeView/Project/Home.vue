@@ -45,8 +45,8 @@ const hasTableCreatePermission = computed(() => {
               target="_blank"
               rel="noopener noreferrer"
             >
-              <img v-if="isDark" width="96" alt="Universal Database" src="~/assets/img/brand/text.png" />
-              <img v-else width="96" alt="Universal Database" src="~/assets/img/brand/universaldatabase.png" />
+              <img v-if="isDark" width="96" alt="UniversalDatabase" src="~/assets/img/brand/text.png" />
+              <img v-else width="96" alt="UniversalDatabase" src="~/assets/img/brand/universaldatabase.png" />
             </a>
 
             <div class="flex flex-grow"></div>

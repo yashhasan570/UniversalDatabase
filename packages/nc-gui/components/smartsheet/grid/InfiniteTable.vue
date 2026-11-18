@@ -153,7 +153,7 @@ const { clearLTARCell, cleaMMCell } = useSmartsheetLtarHelpersOrThrow()
 
 const { loadViewAggregate } = useViewAggregateOrThrow()
 
-const { isAiFeaturesEnabled, generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useNocoAi()
 
 const {
   showRecordPlanLimitExceededModal,

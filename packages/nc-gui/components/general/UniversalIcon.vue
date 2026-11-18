@@ -47,10 +47,10 @@ const onClick = useThrottleFn(() => {
           class="hidden dark:block"
           :width="size"
           :height="size"
-          alt="Universal Database"
+          alt="UniversalDatabase"
           src="~/assets/img/icons/256x256-trans.png"
         />
-        <img v-else :width="size" :height="size" alt="Universal Database" src="~/assets/img/icons/256x256.png" />
+        <img v-else :width="size" :height="size" alt="UniversalDatabase" src="~/assets/img/icons/256x256.png" />
       </template>
 
       <TransitionGroup name="layout" :duration="500">

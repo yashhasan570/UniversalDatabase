@@ -20,7 +20,7 @@ const { t } = useI18n()
 
 const { aiLoading, aiMode, offTooltip } = toRefs(props)
 
-const onTooltip = computed(() => (ncIsUndefined(props.onTooltip) ? t('labels.disableUniversalDatabaseAI') : props.onTooltip))
+const onTooltip = computed(() => (ncIsUndefined(props.onTooltip) ? t('labels.disableNocoAI') : props.onTooltip))
 
 const disableTooltip = computed(() => {
   if (aiLoading.value) return true
@@ -61,7 +61,7 @@ const disableTooltip = computed(() => {
           class="overflow-hidden trasition-all ease duration-200"
           :class="{ 'w-[0px] invisible': aiMode, 'ml-1 w-[78px]': !aiMode }"
         >
-          <slot name="text"> {{ t('labels.useUniversalDatabaseAI') }} </slot>
+          <slot name="text"> {{ t('labels.useNocoAI') }} </slot>
         </span>
       </div>
     </NcButton>

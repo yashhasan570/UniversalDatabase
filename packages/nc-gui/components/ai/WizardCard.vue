@@ -21,7 +21,7 @@ const activeTab = useVModel(props, 'activeTab', emits)
 
 const { tabs, as, contentClassName } = toRefs(props)
 
-const { aiIntegrationAvailable, aiLoading } = useUniversalDatabaseAi()
+const { aiIntegrationAvailable, aiLoading } = useNocoAi()
 
 const handleChangeTab = (tab: string) => {
   if (aiLoading.value) return

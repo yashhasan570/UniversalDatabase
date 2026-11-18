@@ -339,14 +339,14 @@ const isColumnInvalid = ({
   col,
   aiIntegrations = [],
   isReadOnly = false,
-  isUniversalDatabaseAiAvailable = false,
+  isNocoAiAvailable = false,
   columns = [],
   isInterfaceUi = false,
 }: {
   col: ColumnType
   aiIntegrations?: Partial<IntegrationType>[]
   isReadOnly?: boolean
-  isUniversalDatabaseAiAvailable?: boolean
+  isNocoAiAvailable?: boolean
   columns?: ColumnType[]
   isInterfaceUi?: boolean
 }): { isInvalid: boolean; tooltip: string; ignoreTooltip?: boolean } => {
@@ -401,7 +401,7 @@ const isColumnInvalid = ({
           (colOptions as Record<string, any>)?.formula_raw,
         ).missingIds
 
-        const isIntegrationMissing = isUniversalDatabaseAiAvailable
+        const isIntegrationMissing = isNocoAiAvailable
           ? false
           : !colOptions.fk_integration_id ||
             (isReadOnly
@@ -431,7 +431,7 @@ const isColumnInvalid = ({
           (colOptions as Record<string, any>)?.prompt_raw,
         ).missingIds
 
-        const isIntegrationMissing = isUniversalDatabaseAiAvailable
+        const isIntegrationMissing = isNocoAiAvailable
           ? false
           : !colOptions.fk_integration_id ||
             (isReadOnly

@@ -401,7 +401,7 @@ export const cellGroups: CellGroup[] = [
   {
     id: 'system',
     title: 'System',
-    description: 'Audit and key fields maintained by Universal Database.',
+    description: 'Audit and key fields maintained by UniversalDatabase.',
     fixtures: [
       { column: pk, value: 42, note: 'Primary key' },
       {

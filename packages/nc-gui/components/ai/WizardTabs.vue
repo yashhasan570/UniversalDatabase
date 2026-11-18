@@ -19,7 +19,7 @@ const emits = defineEmits(['update:activeTab', 'close'])
 
 const activeTab = useVModel(props, 'activeTab', emits)
 
-const { aiLoading } = useUniversalDatabaseAi()
+const { aiLoading } = useNocoAi()
 </script>
 
 <template>
@@ -36,7 +36,7 @@ const { aiLoading } = useUniversalDatabaseAi()
     </template>
     <template #rightExtra>
       <NcTooltip
-        :title="closeBtnTooltip ?? $t('labels.disableUniversalDatabaseAI')"
+        :title="closeBtnTooltip ?? $t('labels.disableNocoAI')"
         :disabled="ncIsNull(closeBtnTooltip)"
         class="flex children:flex-none"
       >

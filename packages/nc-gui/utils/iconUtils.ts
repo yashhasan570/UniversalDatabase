@@ -97,7 +97,7 @@ import Filter from '~icons/nc-icons/filter'
 import Group from '~icons/nc-icons/group'
 import Sort from '~icons/nc-icons/sort'
 
-// Universal Database Icons
+// UniversalDatabase Icons
 import NcEye from '~icons/nc-icons/eye'
 import NcEyeOff from '~icons/nc-icons/eye-off'
 import NcStar from '~icons/nc-icons/star'
@@ -229,9 +229,9 @@ import NcGitCommit from '~icons/nc-icons/git-commit'
 import NcCircle from '~icons/nc-icons/circle'
 import NcServer1 from '~icons/nc-icons/server1'
 import NcThumbsUpOutline from '~icons/nc-icons/thumbs-up-outline'
-import NcUniversal Database from '~icons/nc-icons/universaldatabase'
-import NcUniversal Database1 from '~icons/nc-icons/universaldatabase1'
-import NcUniversal Database1Dark from '~icons/nc-icons/universaldatabase1-dark'
+import NcNocoDB from '~icons/nc-icons/universaldatabase'
+import NcUniversalDatabase1 from '~icons/nc-icons/universaldatabase1'
+import NcUniversalDatabase1Dark from '~icons/nc-icons/universaldatabase1-dark'
 import NcUniversalDatabaseSquarePuck from '~icons/nc-icons/universaldatabase-square-puck'
 
 // Sync data
@@ -1130,9 +1130,9 @@ export const iconMap = {
   'cellAi': h(NcCellAi, { stroke: 'transparent' }),
   'camera': NcCamera,
   'megaPhone': NcMegaPhone,
-  'universaldatabase': h(NcUniversal Database, { stroke: 'transparent' }),
-  'universaldatabase1': h(NcUniversal Database1, { stroke: 'transparent' }),
-  'universaldatabase1Dark': h(NcUniversal Database1Dark, { stroke: 'transparent' }),
+  'universaldatabase': h(NcNocoDB, { stroke: 'transparent' }),
+  'universaldatabase1': h(NcUniversalDatabase1, { stroke: 'transparent' }),
+  'universaldatabase1Dark': h(NcUniversalDatabase1Dark, { stroke: 'transparent' }),
   'universaldatabaseSquarePuck': h(NcUniversalDatabaseSquarePuck, { stroke: 'transparent' }),
   'bulb': NcBulb,
   'snow': NcSnow,

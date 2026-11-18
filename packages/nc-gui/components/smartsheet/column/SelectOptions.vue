@@ -46,7 +46,7 @@ const validateInfos = computed(() => (isDisplayFormat.value ? {} : columnValidat
 
 // const { base } = storeToRefs(useBase())
 
-const { isAiFeaturesEnabled, aiIntegrationAvailable, predictSelectOptions } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, aiIntegrationAvailable, predictSelectOptions } = useNocoAi()
 
 const { isAiModeFieldModal } = usePredictFields()
 

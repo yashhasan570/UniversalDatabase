@@ -307,11 +307,11 @@ export const extractUserDisplayNameOrEmail = (user?: UserType | Record<string, s
 export type ResolvedUserLike = Pick<UserType, 'id' | 'email' | 'display_name' | 'meta'>
 
 /**
- * Resolves a built-in Universal Database service user (sync, automation, workflow, trash-cleanup)
+ * Resolves a built-in UniversalDatabase service user (sync, automation, workflow, trash-cleanup)
  * by id or email. Returns `undefined` if no match.
  *
  * Service users do not appear in `baseUsers`/collaborator lists, so audit and comment
- * feeds need this fallback to render `display_name` (e.g. "Universal Database Sync") instead of
+ * feeds need this fallback to render `display_name` (e.g. "UniversalDatabase Sync") instead of
  * the raw service email (e.g. "sync-service@universaldatabase.com").
  */
 export const findServiceUser = (idOrEmail?: string | null): ResolvedUserLike | undefined => {

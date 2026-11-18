@@ -7,9 +7,9 @@ const { isWhiteLabelled, productName, faviconUrl } = useBranding()
 
 const instanceName = computed(() => {
   try {
-    return appInfo.value.ncSiteUrl ? new URL(appInfo.value.ncSiteUrl).hostname : 'Universal Database'
+    return appInfo.value.ncSiteUrl ? new URL(appInfo.value.ncSiteUrl).hostname : 'UniversalDatabase'
   } catch {
-    return 'Universal Database'
+    return 'UniversalDatabase'
   }
 })
 
@@ -46,7 +46,7 @@ onMounted(async () => {
               :alt="productName"
               class="h-12 w-12 rounded-lg object-contain"
             />
-            <img v-else src="~/assets/img/brand/universaldatabase-logo.svg" alt="Universal Database" class="h-12 w-12 rounded-lg" />
+            <img v-else src="~/assets/img/brand/universaldatabase-logo.svg" alt="UniversalDatabase" class="h-12 w-12 rounded-lg" />
             <span class="text-nc-content-gray-emphasis text-2xl font-semibold">
               {{ instanceName }}
             </span>

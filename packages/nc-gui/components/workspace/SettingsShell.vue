@@ -26,7 +26,7 @@ const { isEEFeatureBlocked, isPaymentEnabled, activePlanTitle } = useEeConfig()
 
 const { isWhiteLabelled, faviconUrl, productName } = useBranding()
 
-// Same rule as the home sidebar: free deployments show the Universal Database mark.
+// Same rule as the home sidebar: free deployments show the UniversalDatabase mark.
 const isFreePlan = computed(
   () => isEEFeatureBlocked.value || (isPaymentEnabled.value && activePlanTitle.value === PlanTitles.FREE),
 )

@@ -99,7 +99,7 @@ type Filter = FilterType & {
   readOnly?: boolean
 }
 
-type UniversalDatabaseI18n = I18n<Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, string, false>
+type NocoI18n = I18n<Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, string, false>
 
 interface ThemeConfig extends AntTheme {
   primaryColor: string
@@ -1496,7 +1496,7 @@ export type {
   ProjectMetaInfo,
   Field,
   Filter,
-  UniversalDatabaseI18n,
+  NocoI18n,
   ThemeConfig,
   RowMetaRowColorInfo,
   Row,

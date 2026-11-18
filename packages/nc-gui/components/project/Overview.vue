@@ -176,7 +176,7 @@ const onCreateBaseClick = () => {
           <template v-if="activeSidebarTab === 'workflows' && !isMobileMode && showEEFeatures">
             <ProjectActionCreateEmptyWorkflow />
             <ProjectActionCreateEmptyScript />
-            <ProjectActionScriptsByUniversal Database />
+            <ProjectActionScriptsByNocoDB />
           </template>
           <!-- Agent actions (shown on Agents tab) -->
           <template v-if="activeSidebarTab === 'agents' && !isMobileMode && showEEFeatures">

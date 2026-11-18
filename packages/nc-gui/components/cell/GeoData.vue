@@ -394,7 +394,7 @@ useEventListener(document, 'click', handleClose, true)
 function parseGeoString(raw: string): string | null {
   const trimmed = raw.trim()
 
-  // Try convertCellData first (handles Universal Database internal formats) — but only when column metadata is available
+  // Try convertCellData first (handles UniversalDatabase internal formats) — but only when column metadata is available
   if (column?.value?.uidt) {
     try {
       const converted = convertCellData({ value: trimmed, to: column.value.uidt, column: column.value }, false)

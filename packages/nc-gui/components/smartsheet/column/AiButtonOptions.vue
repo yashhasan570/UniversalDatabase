@@ -39,7 +39,7 @@ const {
   fromTableExplorer,
 } = useColumnCreateStoreOrThrow()
 
-const { isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError, generateRows } = useUniversalDatabaseAi()
+const { isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError, generateRows } = useNocoAi()
 
 const isOpenConfigModal = ref<boolean>(false)
 

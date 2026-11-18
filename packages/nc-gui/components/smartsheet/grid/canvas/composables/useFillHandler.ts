@@ -53,7 +53,7 @@ export function useFillHandler({
 
   const { metas } = useMetas()
 
-  const { fillRows } = useUniversalDatabaseAi()
+  const { fillRows } = useNocoAi()
 
   const { base } = storeToRefs(useBase())
 

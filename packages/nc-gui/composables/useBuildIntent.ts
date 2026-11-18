@@ -2,7 +2,7 @@ import type { BuildIntent } from '~/utils/buildIntentUtils'
 import { BUILD_INTENT_KEY, parseBuildIntentFromSearch, parseStoredBuildIntent } from '~/utils/buildIntentUtils'
 
 /**
- * Build intent — a "what do you want to build?" prompt handed over from the UniversalDatabaseAI
+ * Build intent — a "what do you want to build?" prompt handed over from the NocoAI
  * marketing landing page, which sends visitors to
  * `/signup?basePrompt=<text>&autoBuild=1`.
  *

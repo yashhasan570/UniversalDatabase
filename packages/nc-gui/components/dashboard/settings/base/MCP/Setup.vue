@@ -33,12 +33,12 @@ const serverName = computed(() => {
 
   if (props.showWorkspaceBaseInfo) {
     title = isScopedConnection.value
-      ? `Universal Database - ${props.token.title}`
+      ? `UniversalDatabase - ${props.token.title}`
       : isEeUI
-      ? `Universal Database ${props.token.workspace?.title || 'Workspace'} - ${props.token.base?.title || 'Project'}`
-      : `Universal Database - ${props.token.base?.title || 'Project'}`
+      ? `UniversalDatabase ${props.token.workspace?.title || 'Workspace'} - ${props.token.base?.title || 'Project'}`
+      : `UniversalDatabase - ${props.token.base?.title || 'Project'}`
   } else {
-    title = `Universal Database Project - ${openedProject.value?.title}`
+    title = `UniversalDatabase Project - ${openedProject.value?.title}`
   }
 
   if (activeTab.value === 'antigravity') {

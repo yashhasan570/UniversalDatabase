@@ -27,9 +27,9 @@ const { isChatWootEnabled } = useProvideChatwoot()
 
 const { isModalVisible: isChatVisible } = useChatWoot()
 
-// White-label may override the help-menu support email (falls back to Universal Database
+// White-label may override the help-menu support email (falls back to UniversalDatabase
 // support when unset); the rest of the help menu is unchanged — enterprise
-// support/docs continue to route through Universal Database.
+// support/docs continue to route through UniversalDatabase.
 const { isWhiteLabelled, config } = useBranding()
 
 const visible = ref(false)
@@ -126,7 +126,7 @@ const helpItems = computed<CategoryItemType[]>(() => {
         },
         {
           // White-label may override the support contact; otherwise fall back to
-          // Universal Database support — enterprise support routes through Universal Database regardless.
+          // UniversalDatabase support — enterprise support routes through UniversalDatabase regardless.
           title: isWl && supportEmail ? supportEmail : 'support@universaldatabase.com',
           icon: 'ncMail',
           e: 'c:universaldatabase:contact-us-mail-copy',

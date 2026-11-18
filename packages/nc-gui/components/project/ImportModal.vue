@@ -46,7 +46,7 @@ async function openAirtableImportDialog(baseId?: string, sourceId?: string) {
   }
 }
 
-async function openUniversalDatabaseDbImportDialog(baseId?: string) {
+async function openNocoDbImportDialog(baseId?: string) {
   if (!baseId) return
 
   // $e('a:actions:import-universaldatabase')
@@ -56,7 +56,7 @@ async function openUniversalDatabaseDbImportDialog(baseId?: string) {
   await nextTick()
   visible.value = false
 
-  const { close } = useDialog(resolveComponent('DlgUniversalDatabaseDbImport'), {
+  const { close } = useDialog(resolveComponent('DlgNocoDbImport'), {
     'modelValue': isOpen,
     'baseId': baseId,
     'onUpdate:modelValue': closeDialog,
@@ -108,7 +108,7 @@ const onClick = (type: 'airtable' | 'csv' | 'excel' | 'json' | 'universaldatabas
   if (type === 'airtable') {
     openAirtableImportDialog(source.value.base_id, source.value.id)
   } else if (type === 'universaldatabase') {
-    openUniversalDatabaseDbImportDialog(source.value.base_id)
+    openNocoDbImportDialog(source.value.base_id)
   } else {
     openQuickImportDialog(type)
   }

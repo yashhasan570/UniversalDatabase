@@ -428,7 +428,7 @@ export interface CustomSystemFieldsPayload {
 
 /**
  * Abstract data types supported by sync columns.
- * Used for type mapping between external systems and Universal Database.
+ * Used for type mapping between external systems and UniversalDatabase.
  */
 export type SyncAbstractType =
   | 'string'    // Text values
@@ -442,13 +442,13 @@ export type SyncAbstractType =
 
 /**
  * Defines a single column in a sync table.
- * Specifies how data from the external source maps to a Universal Database column.
+ * Specifies how data from the external source maps to a UniversalDatabase column.
  */
 export interface SyncColumnDefinition {
   /** Display name for the column */
   title: string;
 
-  /** Universal Database UI type for the column (e.g., SingleLineText, Number, DateTime) */
+  /** UniversalDatabase UI type for the column (e.g., SingleLineText, Number, DateTime) */
   uidt: UITypes;
 
   /**
@@ -595,7 +595,7 @@ export interface SyncRecord {
    */
   RemoteRaw: SyncValue<string>;
 
-  /** Timestamp when this record was last synced to Universal Database */
+  /** Timestamp when this record was last synced to UniversalDatabase */
   RemoteSyncedAt?: SyncValue<string>;
 
   /** Namespace identifier for multi-tenant scenarios */

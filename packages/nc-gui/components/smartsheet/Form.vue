@@ -2112,7 +2112,7 @@ useFormCommands({
 
                     <div v-if="!parseProp(formViewData?.meta).hide_branding" class="px-8 lg:px-12">
                       <a-divider class="!my-8" />
-                      <!-- Universal Database Branding  -->
+                      <!-- UniversalDatabase Branding  -->
                       <div class="inline-block">
                         <GeneralFormBranding @click.stop />
                       </div>
@@ -2443,7 +2443,7 @@ useFormCommands({
                           <PaymentUpgradeBadgeProvider :feature="PlanFeatureTypes.FEATURE_HIDE_BRANDING">
                             <template #default="{ click }">
                               <div class="flex items-center justify-between gap-3">
-                                <!-- Hide Universal Database Branding -->
+                                <!-- Hide UniversalDatabase Branding -->
 
                                 <span class="flex items-center gap-3">
                                   {{ isWhiteLabelled ? $t('labels.hideBranding') : $t('labels.hideNocodbBranding') }}

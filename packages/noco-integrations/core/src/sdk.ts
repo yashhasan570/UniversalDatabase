@@ -1,3 +1,3 @@
-import * as UniversalDatabaseSDK from 'universaldatabase-sdk';
+import * as NocoSDK from 'universaldatabase-sdk';
 
-export { UniversalDatabaseSDK };
+export { NocoSDK };

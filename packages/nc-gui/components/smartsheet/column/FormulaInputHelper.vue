@@ -1017,7 +1017,7 @@ function updateSignatureHint() {
   signatureHint.value = null
 }
 
-const { isAiFeaturesEnabled, aiIntegrationAvailable, aiLoading, predictFormula, repairFormula } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, aiIntegrationAvailable, aiLoading, predictFormula, repairFormula } = useNocoAi()
 
 enum AI_MODE {
   NONE = 'none',

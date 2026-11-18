@@ -13,7 +13,7 @@ const cellValue = inject(CellValueInj, ref())
 
 const { currentRow, displayValue, changedColumns } = useSmartsheetRowStoreOrThrow()
 
-const { generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useUniversalDatabaseAi()
+const { generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useNocoAi()
 
 const { appInfo } = useGlobal()
 

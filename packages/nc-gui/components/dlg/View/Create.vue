@@ -227,7 +227,7 @@ const typeAlias = computed(
     }[props.type]),
 )
 
-const { isAiFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError, predictViews: _predictViews, createViews } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError, predictViews: _predictViews, createViews } = useNocoAi()
 
 const aiMode = ref(false)
 

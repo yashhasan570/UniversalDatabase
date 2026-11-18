@@ -276,7 +276,7 @@ export function useCanvasTable({
   const baseRoleLoader = new BaseRoleLoader(getBaseRoles, () => triggerRefreshCanvas())
   const { meta: metaKey, ctrl: ctrlKey } = useMagicKeys()
   const { isDataReadOnly, isUIAllowed } = useRoles()
-  const { isAiFeaturesEnabled, aiIntegrations, isUniversalDatabaseAiAvailable, generateRows: _generateRows } = useUniversalDatabaseAi()
+  const { isAiFeaturesEnabled, aiIntegrations, isNocoAiAvailable, generateRows: _generateRows } = useNocoAi()
   const { isFeatureEnabled } = useBetaFeatureToggle()
   const scriptStore = useScriptStore()
   const tooltipStore = useTooltipStore()
@@ -652,7 +652,7 @@ export function useCanvasTable({
           col: f,
           aiIntegrations: aiIntegrations.value,
           isReadOnly: isPublicView.value || !isDataEditAllowed.value || isSqlView.value,
-          isUniversalDatabaseAiAvailable: isUniversalDatabaseAiAvailable.value,
+          isNocoAiAvailable: isNocoAiAvailable.value,
           columns: meta.value?.columns as ColumnType[],
           isInterfaceUi: !!interfacePageDataApi,
         })

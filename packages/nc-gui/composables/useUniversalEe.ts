@@ -1,4 +1,4 @@
-export const useUniversalDatabaseEe = () => {
+export const useNocoEe = () => {
   const loadMagic = ref(false)
 
   const predictColumnType = async (..._args: any) => {}

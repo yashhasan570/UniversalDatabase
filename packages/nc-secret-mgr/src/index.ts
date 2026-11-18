@@ -1,21 +1,21 @@
 import figlet from "figlet";
 import { Command } from 'commander';
-import { getUniversalDatabaseConfig } from "./core";
+import { getNocoConfig } from "./core";
 import { SecretManager } from "./core";
 import { NcError } from "./core";
 import { logger } from "./core";
 
-console.log(figlet.textSync("Universal Database Secret CLI"));
+console.log(figlet.textSync("UniversalDatabase Secret CLI"));
 
 const program = new Command();
 
 program
   .version('1.0.0')
-  .description('Universal Database Secret CLI')
+  .description('UniversalDatabase Secret CLI')
   .arguments('<prevSecret> <newSecret>')
-  .option('--nc-db <char>', 'Universal Database  connection database url, equivalent to NC_DB env variable')
-  .option('--nc-db-json <char>', 'Universal Database connection database json, equivalent to NC_DB_JSON env variable')
-  .option('--nc-db-json-file <char>', 'Universal Database connection database json file path, equivalent to NC_DB_JSON_FILE env variable')
+  .option('--nc-db <char>', 'UniversalDatabase  connection database url, equivalent to NC_DB env variable')
+  .option('--nc-db-json <char>', 'UniversalDatabase connection database json, equivalent to NC_DB_JSON env variable')
+  .option('--nc-db-json-file <char>', 'UniversalDatabase connection database json file path, equivalent to NC_DB_JSON_FILE env variable')
   .option('--database-url <char>', 'JDBC database url, equivalent to DATABASE_URL env variable')
   .option('--database-url-file <char>', 'JDBC database url file path, equivalent to DATABASE_URL_FILE env variable')
   .option('-p, --prev <char>', 'old secret string to decrypt sources and integrations')
@@ -25,7 +25,7 @@ program
     try {
       // extract options
       const options = program.opts();
-      const config = await getUniversalDatabaseConfig(options);
+      const config = await getNocoConfig(options);
       const { prevSecret = prevVal, newSecret = newVal } = program.opts();
 
       if (!prevSecret || !newSecret) {

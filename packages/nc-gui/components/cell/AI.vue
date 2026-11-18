@@ -9,7 +9,7 @@ const props = defineProps<Props>()
 
 const emits = defineEmits(['update:modelValue', 'save'])
 
-const { generateRows, generatingRows, generatingColumnRows, aiIntegrations } = useUniversalDatabaseAi()
+const { generateRows, generatingRows, generatingColumnRows, aiIntegrations } = useNocoAi()
 
 const { row } = useSmartsheetRowStoreOrThrow()
 

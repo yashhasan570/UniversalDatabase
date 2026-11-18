@@ -56,7 +56,7 @@ onMounted(async () => {
           <img
             src="~assets/img/placeholder/universaldatabase-pg-integration.png"
             class="!w-full !max-w-[864px] flex-none"
-            alt="UniversalDatabaseDb X Pg integration"
+            alt="NocoDb X Pg integration"
           />
           <span class="text-base font-bold">{{ $t('labels.connectWithFavoriteTools') }}</span>
           <span class="text-sm text-nc-content-gray-subtle2">{{ $t('msg.info.integrateWithFavoriteTools') }}</span>
@@ -86,7 +86,7 @@ onMounted(async () => {
                       <a-row :gutter="24">
                         <a-col :span="12">
                           <a-form-item :label="$t('labels.connectionName')">
-                            <a-input value="Universal Database" disabled />
+                            <a-input value="UniversalDatabase" disabled />
                           </a-form-item>
                         </a-col>
                       </a-row>

@@ -21,7 +21,7 @@ const table = computed(() => data.table)
 // underlying DB cases identifiers:
 //   - Oracle uppercases external table/column names (e.g. COUNTRY) — the
 //     lowercase variant (`country`) matches the convention the tests use.
-//   - Universal Database-created tables keep their title case (e.g. `Test`) — the as-is
+//   - UniversalDatabase-created tables keep their title case (e.g. `Test`) — the as-is
 //     variant keeps those hooks working.
 // pg/mysql/mssql already store lowercase physical names, so both variants
 // coincide there (the Set dedupes the harmless duplicate).

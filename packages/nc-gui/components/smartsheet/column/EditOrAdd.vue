@@ -77,7 +77,7 @@ if (props.preload?.colOptions) {
   formState.value.colOptions = { ...props.preload.colOptions }
 }
 
-const { isAiFeaturesEnabled, isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError } = useNocoAi()
 
 const {
   aiMode: aiAutoSuggestMode,

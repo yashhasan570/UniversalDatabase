@@ -363,8 +363,8 @@ async function generateManifest(type: string, subType: string) {
 }
 
 /*
-Universal Database Integration tool
-- Universal Database have following categories of integrations:
+UniversalDatabase Integration tool
+- UniversalDatabase have following categories of integrations:
   - AI (ai)
   - Sync (sync)
 - This tool will help you to create a boilerplate for creating a new subType for category

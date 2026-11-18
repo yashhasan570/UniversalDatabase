@@ -36,7 +36,7 @@ onMounted(() => {
   // if we are, communicate to the parent page whenever we navigate to a new url,
   // so that the parent page can respond to it properly.
   // E.g. by making the browser navigate to that url, and not just the iframe.
-  // This is useful for integrating Universal Database into other products,
+  // This is useful for integrating UniversalDatabase into other products,
   // such as Outline (https://github.com/outline/outline/pull/4184).
   if (window.parent !== window) {
     const notifyLocationChange = (value: string) =>
@@ -86,8 +86,8 @@ export default {
                 <img :src="(isDark ? logoDarkUrl : logoUrl) ?? ''" :alt="productName" class="h-7 max-w-[120px] object-contain" />
               </template>
               <template v-else-if="!isWhiteLabelled">
-                <img v-if="isDark" width="96" alt="Universal Database" src="~/assets/img/brand/text.png" class="flex-none min-w-[96px]" />
-                <img v-else width="96" alt="Universal Database" src="~/assets/img/brand/universaldatabase.png" class="flex-none min-w-[96px]" />
+                <img v-if="isDark" width="96" alt="UniversalDatabase" src="~/assets/img/brand/text.png" class="flex-none min-w-[96px]" />
+                <img v-else width="96" alt="UniversalDatabase" src="~/assets/img/brand/universaldatabase.png" class="flex-none min-w-[96px]" />
               </template>
             </a>
 

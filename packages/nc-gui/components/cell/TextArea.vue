@@ -74,7 +74,7 @@ const { showNull, user } = useGlobal()
 
 const { currentRow } = useSmartsheetRowStoreOrThrow()
 
-const { aiLoading, aiIntegrations, generatingRows, generatingColumnRows } = useUniversalDatabaseAi()
+const { aiLoading, aiIntegrations, generatingRows, generatingColumnRows } = useNocoAi()
 
 const baseStore = useBase()
 

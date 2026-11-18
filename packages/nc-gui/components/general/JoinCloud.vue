@@ -88,7 +88,7 @@ const onMouseover = async () => {
         <div class="w-70.5 bg-transparent overflow-hidden rounded-2xl shadow border-1 border-nc-border-gray-medium">
           <div class="p-4 bg-nc-bg-default gap-4 inline-flex flex-col w-full">
             <div class="flex items-center gap-3">
-              <div class="text-base text-nc-content-gray-emphasis font-bold flex-1">Universal Database Cloud</div>
+              <div class="text-base text-nc-content-gray-emphasis font-bold flex-1">UniversalDatabase Cloud</div>
               <div class="text-caption px-1 rounded-md bg-nc-bg-brand text-nc-content-brand">{{ $t('labels.usageBased') }}</div>
             </div>
 

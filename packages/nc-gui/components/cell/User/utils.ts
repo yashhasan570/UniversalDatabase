@@ -30,7 +30,7 @@ export const isRecordStampingServiceUser = (idOrEmail?: string | null) =>
 
 // Absent from the base-users list (they don't live in nc_users), so expose
 // them as selectable options in the filter dropdown so records created by
-// e.g. "Universal Database Workflow" can be filtered.
+// e.g. "UniversalDatabase Workflow" can be filtered.
 export const getSystemUserFilterOptions = (column: ColumnType): UserFieldRecordType[] => {
   if (![UITypes.CreatedBy, UITypes.LastModifiedBy].includes(column.uidt as UITypes)) return []
 

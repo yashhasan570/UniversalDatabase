@@ -110,7 +110,7 @@ const viewsStore = useViewsStore()
 
 const { openedViewsTab } = storeToRefs(viewsStore)
 
-const { isAiFeaturesEnabled, isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled, isAiBetaFeaturesEnabled, aiIntegrationAvailable, aiLoading, aiError } = useNocoAi()
 
 const localMetaColumns = ref<ColumnType[] | undefined>([])
 
@@ -1848,7 +1848,7 @@ onBeforeRouteUpdate((_to, from) => confirmUnsavedChangesBeforeLeaving(from))
                     </div>
                   </NcButton>
                 </NcTooltip>
-                <NcTooltip :title="aiMode ? $t('labels.disableUniversalDatabaseAI') : ''" :disabled="!aiMode">
+                <NcTooltip :title="aiMode ? $t('labels.disableNocoAI') : ''" :disabled="!aiMode">
                   <NcDropdown :trigger="['hover']" placement="bottomRight" overlay-class-name="!border-nc-purple-200">
                     <NcButton
                       size="small"

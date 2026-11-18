@@ -11,22 +11,22 @@ const socialIcons = [
     e: 'c:universaldatabase:twitter-open',
   },
   {
-    name: 'Universal Database',
+    name: 'UniversalDatabase',
     icon: iconMap.youtube,
     e: 'c:universaldatabase:youtube-open',
     link: 'https://www.youtube.com/@universaldatabase',
   },
   {
-    name: 'Universal Database',
+    name: 'UniversalDatabase',
     icon: iconMap.iconDiscord,
     e: 'c:universaldatabase:discord-open',
     link: 'http://discord.universaldatabase.com',
   },
   {
-    name: 'r/Universal Database',
+    name: 'r/UniversalDatabase',
     icon: iconMap.iconReddit,
     e: 'c:universaldatabase:reddit-open',
-    link: 'https://www.reddit.com/r/Universal Database/',
+    link: 'https://www.reddit.com/r/UniversalDatabase/',
   },
   {
     name: 'Forum',

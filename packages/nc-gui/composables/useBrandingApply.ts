@@ -58,7 +58,7 @@ export const useBrandingApply = createSharedComposable(() => {
     if (el.getAttribute('href') !== next) el.setAttribute('href', next)
 
     // iOS home-screen icon — point it at the white-label favicon too (better a
-    // small brand icon than the Universal Database one); restore the default when off.
+    // small brand icon than the UniversalDatabase one); restore the default when off.
     const apple = document.querySelector("link[rel~='apple-touch-icon']") as HTMLLinkElement | null
     if (apple) {
       const appleNext = url || DEFAULT_APPLE_TOUCH_ICON
@@ -67,7 +67,7 @@ export const useBrandingApply = createSharedComposable(() => {
   }
 
   // Mobile browser chrome / PWA splash colour. Follows the brand colour; resets
-  // to the built-in Universal Database blue when white-labelling is off / no colour set.
+  // to the built-in UniversalDatabase blue when white-labelling is off / no colour set.
   function applyThemeColor(hex: string | null) {
     const meta = document.querySelector("meta[name='theme-color']") as HTMLMetaElement | null
     if (!meta) return
@@ -80,7 +80,7 @@ export const useBrandingApply = createSharedComposable(() => {
     const css = hex ? buildBrandStyleCss(hex) : null
 
     // No colour (or invalid hex) → drop the override and reset Ant Design's
-    // ConfigProvider back to the built-in Universal Database blue.
+    // ConfigProvider back to the built-in UniversalDatabase blue.
     if (!css) {
       style?.remove()
       setTheme()

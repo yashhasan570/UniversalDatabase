@@ -116,7 +116,7 @@ const [useProvideIntegrationViewStore, _useIntegrationStore] = useInjectionState
 
   const { t } = useI18n()
 
-  const { aiIntegrations } = useUniversalDatabaseAi()
+  const { aiIntegrations } = useNocoAi()
 
   const isFromIntegrationPage = ref(false)
 

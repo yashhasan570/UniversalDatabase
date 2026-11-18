@@ -95,24 +95,24 @@ export default defineNuxtConfig({
           content: process.env.npm_package_description || '',
         },
         // Open Graph
-        { hid: 'og:site_name', property: 'og:site_name', content: 'Universal Database' },
+        { hid: 'og:site_name', property: 'og:site_name', content: 'UniversalDatabase' },
         { hid: 'og:type', property: 'og:type', content: 'website' },
-        { hid: 'og:title', property: 'og:title', content: 'Universal Database' },
+        { hid: 'og:title', property: 'og:title', content: 'UniversalDatabase' },
         {
           hid: 'og:description',
           property: 'og:description',
           content:
-            'Universal Database provides an intuitive spreadsheet interface for creating online databases, either from scratch or by connecting to any Postgres/MySQL. Access your data through interactive UIs or via API and SQL. Get started for free.',
+            'UniversalDatabase provides an intuitive spreadsheet interface for creating online databases, either from scratch or by connecting to any Postgres/MySQL. Access your data through interactive UIs or via API and SQL. Get started for free.',
         },
         { hid: 'og:url', property: 'og:url', content: 'https://universaldatabase.com' },
         // Twitter
         { hid: 'twitter:card', name: 'twitter:card', content: 'summary_large_image' },
-        { hid: 'twitter:title', name: 'twitter:title', content: 'Universal Database' },
+        { hid: 'twitter:title', name: 'twitter:title', content: 'UniversalDatabase' },
         {
           hid: 'twitter:description',
           name: 'twitter:description',
           content:
-            'Universal Database provides an intuitive spreadsheet interface for creating online databases, either from scratch or by connecting to any Postgres/MySQL. Access your data through interactive UIs or via API and SQL. Get started for free.',
+            'UniversalDatabase provides an intuitive spreadsheet interface for creating online databases, either from scratch or by connecting to any Postgres/MySQL. Access your data through interactive UIs or via API and SQL. Get started for free.',
         },
         {
           hid: 'twitter:image',

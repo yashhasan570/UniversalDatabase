@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Universal Database Auto-upstall installer.
+# UniversalDatabase Auto-upstall installer.
 # Single image (community + enterprise). License activates post-install via Admin Panel.
 #
 set -euo pipefail
@@ -115,7 +115,7 @@ get_public_ip() {
 # for you: if a dependency is missing, we point you at it and ask you to re-run.
 check_prereqs() {
   [ -n "$NOCO_SKIP_PREFLIGHT" ] && return 0
-  printf '\n%bUniversal Database Auto-upstall%b\n' "$BOLD" "$NC"
+  printf '\n%bNocoDB Auto-upstall%b\n' "$BOLD" "$NC"
   printf '%b═══════════════════════════════════════════%b\n' "$DIM" "$NC"
 
   local missing=""
@@ -170,7 +170,7 @@ collect_domain() {
   [ -n "$DOMAIN" ] && return 0
   [ "$NON_INTERACTIVE" -eq 1 ] && return 0
   header "Domain"
-  info "Enter the domain or IP for this Universal Database instance."
+  info "Enter the domain or IP for this UniversalDatabase instance."
   info "Leave blank for local mode (http://localhost:8080, no SSL)."
 
   local pub_ip; pub_ip="$(get_public_ip)"
@@ -588,7 +588,7 @@ parse_flags() {
       --redis-url=*)     REDIS_URL="${1#*=}" ;;
       --help|-h)
         cat <<HELP
-Universal Database Auto-upstall. Interactive: run with no flags.
+UniversalDatabase Auto-upstall. Interactive: run with no flags.
 
 Common shortcuts:
   --quick                 Install with bundled Postgres + Redis, local mode (port 8080).
@@ -676,7 +676,7 @@ require_tty() {
 # Bring the stack up. Skipped under NOCO_SKIP_PREFLIGHT (tests and config-only re-runs).
 start_stack() {
   [ -n "$NOCO_SKIP_PREFLIGHT" ] && return 0
-  header "Starting Universal Database"
+  header "Starting UniversalDatabase"
   info "Pulling images and starting containers (first run can take a few minutes)…"
   if ( cd "$WORK_DIR" && docker compose up -d ); then
     STACK_STARTED=1
@@ -693,12 +693,12 @@ display_completion() {
 
   if [ "$STACK_STARTED" -eq 1 ]; then
     if [ "$MODE" = "production" ]; then
-      printf '  %bUniversal Database is starting at:%b https://%s\n' "$GREEN" "$NC" "$DOMAIN"
+      printf '  %bNocoDB is starting at:%b https://%s\n' "$GREEN" "$NC" "$DOMAIN"
       printf '    The TLS certificate can take a minute to issue on first run.\n\n'
     elif [ "$MODE" = "production-ip" ]; then
-      printf '  %bUniversal Database is starting at:%b http://%s%b (plaintext, no SSL)%b\n\n' "$GREEN" "$NC" "$DOMAIN" "$YELLOW" "$NC"
+      printf '  %bNocoDB is starting at:%b http://%s%b (plaintext, no SSL)%b\n\n' "$GREEN" "$NC" "$DOMAIN" "$YELLOW" "$NC"
     else
-      printf '  %bUniversal Database is starting at:%b http://localhost:%s\n\n' "$GREEN" "$NC" "$HOST_PORT"
+      printf '  %bNocoDB is starting at:%b http://localhost:%s\n\n' "$GREEN" "$NC" "$HOST_PORT"
     fi
     printf '  %bManage the stack:%b\n' "$BOLD" "$NC"
     printf '    cd %s\n' "$WORK_DIR"
@@ -713,15 +713,15 @@ display_completion() {
     printf '    docker compose up -d\n'
     printf '    docker compose logs -f universaldatabase\n\n'
     if [ "$MODE" = "production" ]; then
-      printf '  %bUniversal Database will be available at:%b https://%s\n\n' "$GREEN" "$NC" "$DOMAIN"
+      printf '  %bNocoDB will be available at:%b https://%s\n\n' "$GREEN" "$NC" "$DOMAIN"
     elif [ "$MODE" = "production-ip" ]; then
-      printf '  %bUniversal Database will be available at:%b http://%s%b (plaintext, no SSL)%b\n\n' "$GREEN" "$NC" "$DOMAIN" "$YELLOW" "$NC"
+      printf '  %bNocoDB will be available at:%b http://%s%b (plaintext, no SSL)%b\n\n' "$GREEN" "$NC" "$DOMAIN" "$YELLOW" "$NC"
     else
-      printf '  %bUniversal Database will be available at:%b http://localhost:%s\n\n' "$GREEN" "$NC" "$HOST_PORT"
+      printf '  %bNocoDB will be available at:%b http://localhost:%s\n\n' "$GREEN" "$NC" "$HOST_PORT"
     fi
   fi
 
-  printf '  %bActivate your license:%b open Universal Database → Admin Panel → License → paste your key\n\n' "$BOLD" "$NC"
+  printf '  %bActivate your license:%b open UniversalDatabase → Admin Panel → License → paste your key\n\n' "$BOLD" "$NC"
 }
 
 # ── Main ──────────────────────────────────────────────────────────────────────

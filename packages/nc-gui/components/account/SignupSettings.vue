@@ -19,7 +19,7 @@ const settings = ref<{
   abuse_contact_email: '',
 })
 
-// Cloud reports always go to Universal Database and cloud has no app-settings endpoint.
+// Cloud reports always go to UniversalDatabase and cloud has no app-settings endpoint.
 const isSelfHosted = computed(() => !appInfo.value.isCloud || appInfo.value.isOnPrem)
 
 const savedAbuseContactEmail = ref('')

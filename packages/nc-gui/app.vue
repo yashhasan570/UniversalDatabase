@@ -180,7 +180,7 @@ const _ = (window as any).ResizeObserver
       <CmdK :key="user?.id" ref="commandPalette" v-model:open="cmdK" :set-active-cmd-view="setActiveCmdView" />
       <!-- Recent Views. Cycles through recently visited Views -->
       <CmdL :key="user?.id" v-model:open="cmdL" :set-active-cmd-view="setActiveCmdView" />
-      <!-- Documentation. Integrated Universal Database Docs directly inside the Product -->
+      <!-- Documentation. Integrated UniversalDatabase Docs directly inside the Product -->
       <CmdJ v-model:open="cmdJ" :set-active-cmd-view="setActiveCmdView" />
       <DashboardFeatureExperimentation v-model:value="isExperimentalFeatureModalOpen" />
     </div>

@@ -76,7 +76,7 @@ const {
   aiError,
   generateTables,
   predictNextTables: _predictNextTables,
-} = useUniversalDatabaseAi()
+} = useNocoAi()
 
 const aiMode = ref(false)
 

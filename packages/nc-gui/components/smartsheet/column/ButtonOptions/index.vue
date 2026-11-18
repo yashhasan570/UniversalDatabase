@@ -34,7 +34,7 @@ const { getMeta, getMetaByKey } = useMetas()
 
 const { getColor } = useTheme()
 
-const { isAiBetaFeaturesEnabled } = useUniversalDatabaseAi()
+const { isAiBetaFeaturesEnabled } = useNocoAi()
 
 const {
   getPlanTitle,

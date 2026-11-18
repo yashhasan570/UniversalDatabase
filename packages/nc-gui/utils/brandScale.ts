@@ -3,7 +3,7 @@ import tinycolor from 'tinycolor2'
 /**
  * White-label brand-scale generation.
  *
- * Universal Database's entire accented surface (buttons, hovers, links, selected rows,
+ * UniversalDatabase's entire accented surface (buttons, hovers, links, selected rows,
  * focus rings, brand-tinted backgrounds) is driven by the `--color-brand-*`
  * reference palette (see assets/css/variables.css). A white-label admin only
  * picks a single seed hex, so we derive the full 20→900 ramp from it — for
@@ -125,7 +125,7 @@ function clampL(v: number): number {
 /**
  * Whether white button text stays legible on the seed colour (it's the 500 fill
  * behind `text-white` primary buttons). Uses WCAG AA at "large" size (3:1) —
- * Universal Database button labels are 14px medium-weight, which qualifies as large text —
+ * UniversalDatabase button labels are 14px medium-weight, which qualifies as large text —
  * so reasonable brand colours pass and only egregiously light/low-contrast
  * picks (pale tints, bright yellow) are flagged. Returns null for invalid hex.
  */

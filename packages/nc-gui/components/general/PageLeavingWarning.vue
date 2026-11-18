@@ -70,7 +70,7 @@ const handleRedirect = (proceedToLink = false) => {
       />
       <GeneralNocodbLogo v-else class="!w-14 !h-14" />
     </div>
-    <div class="text-xl font-bold text-nc-content-gray">{{ $t('title.youAreLeavingUniversal Database') }}</div>
+    <div class="text-xl font-bold text-nc-content-gray">{{ $t('title.youAreLeavingNocoDB') }}</div>
     <div class="text-sm font-weight-500 text-nc-content-gray-subtle2">{{ $t('title.onlyProceedIfYouTrustThisLink') }}</div>
     <div class="w-full rounded-lg border-1 border-nc-border-gray-medium bg-nc-bg-gray-extralight px-3 py-2 text-left">
       <div class="text-sm font-bold text-nc-content-gray break-all" data-testid="nc-leaving-host">{{ redirectHost }}</div>

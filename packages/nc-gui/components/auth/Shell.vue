@@ -32,7 +32,7 @@ const isDesktop = useMediaQuery('(min-width: 1024px)')
       :style="panelStyle"
     >
       <div v-if="!isWhiteLabelled" class="px-12 flex items-center">
-        <img src="~/assets/img/brand/text.png" alt="Universal Database" class="h-6 w-auto select-none" @dblclick="emits('logoDblclick')" />
+        <img src="~/assets/img/brand/text.png" alt="UniversalDatabase" class="h-6 w-auto select-none" @dblclick="emits('logoDblclick')" />
       </div>
 
       <div v-else class="px-12 flex items-center gap-3">
@@ -40,7 +40,7 @@ const isDesktop = useMediaQuery('(min-width: 1024px)')
           class="w-10 h-10 rounded-[10px] flex items-center justify-center shadow-sm"
           :class="isDark ? 'bg-[#16161a] ring-1 ring-white/15' : 'bg-white'"
         >
-          <GeneralUniversalDatabaseIcon inline :size="26" :animate="loading" @dblclick="emits('logoDblclick')" />
+          <GeneralNocoIcon inline :size="26" :animate="loading" @dblclick="emits('logoDblclick')" />
         </div>
         <span class="text-subHeading1 text-white">{{ productName }}</span>
       </div>
@@ -68,7 +68,7 @@ const isDesktop = useMediaQuery('(min-width: 1024px)')
         <div class="w-full max-w-[380px] flex flex-col">
           <div class="flex flex-col items-center lg:items-start text-center lg:text-left mb-8">
             <!-- the in-product mark; a white-labelled instance keeps its own icon -->
-            <GeneralUniversalDatabaseIcon
+            <GeneralNocoIcon
               v-if="isWhiteLabelled"
               inline
               :size="44"

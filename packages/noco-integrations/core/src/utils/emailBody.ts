@@ -377,7 +377,7 @@ function inlineImagesTooLargeError(): Error {
   );
 }
 
-/** Scheme of body images stored as Universal Database files: `src="nc-file:<file_url>"`. */
+/** Scheme of body images stored as UniversalDatabase files: `src="nc-file:<file_url>"`. */
 export const EMAIL_FILE_IMAGE_SCHEME = 'nc-file:';
 
 const FILE_IMAGE_SRC =

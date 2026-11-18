@@ -1814,7 +1814,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       childrenListOffsetCount.value = 0
     }
 
-    // Per-link ordering (v2 mm on Postgres): the Universal Database-managed junction carries
+    // Per-link ordering (v2 mm on Postgres): the UniversalDatabase-managed junction carries
     // a per-direction Order column, so linked records can be manually arranged.
     // Only surfaced when the junction actually has the order column
     // (`fk_mm_child_order_column_id`) AND the source is Postgres — the ordered
@@ -1822,7 +1822,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
     // Reorder applies to any multi-value junction side (mm, and the "many" side
     // of a v2 one-to-many) — i.e. not the single-target sides (bt/mo/oo/bt-like).
     // The junction Order column must exist (only present for v2 mm-like links on
-    // Universal Database-managed sources) and the source must be Postgres (ordered read is
+    // UniversalDatabase-managed sources) and the source must be Postgres (ordered read is
     // PG-only). v1 hm has no junction/Order column, so it's excluded here anyway.
     const canReorder = computed(
       () =>
@@ -1866,7 +1866,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       // `limit` lets the reorderable child list reload its full set in one go.
       await loadChildrenList(false, undefined, limit)
       // Refresh the originating client's grid row (CE path). On EE this is a
-      // no-op and the UniversalDatabaseSocket broadcast from the backend refreshes the canvas
+      // no-op and the NocoSocket broadcast from the backend refreshes the canvas
       // instead — same split as link()/unlink().
       _reloadData?.({ shouldShowLoading: false, path: path.value })
     }

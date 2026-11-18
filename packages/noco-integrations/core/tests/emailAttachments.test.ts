@@ -111,7 +111,7 @@ describe('collectEmailAttachmentSources', () => {
     ]);
   });
 
-  it('treats S3-style attachment objects as Universal Database files', () => {
+  it('treats S3-style attachment objects as UniversalDatabase files', () => {
     const s3 = {
       url: 'https://bucket.s3/nc/uploads/a.png',
       title: 'a.png',

@@ -70,7 +70,7 @@ const canEditIntegration = (integration: IntegrationType) => {
   return canManage.value && integration.created_by === user.value?.id
 }
 
-// Base mode hides Edit from non-creators (backend is creator-only); Universal Database's own connection needs data reflection.
+// Base mode hides Edit from non-creators (backend is creator-only); UniversalDatabase's own connection needs data reflection.
 const canOpenEdit = (integration: IntegrationType) => {
   if (!canEditIntegration(integration)) return false
 

@@ -79,7 +79,7 @@ const toBeDeletedIntegration = ref<
   | null
 >(null)
 
-// Universal Database's own connection is only editable while data reflection is on.
+// UniversalDatabase's own connection is only editable while data reflection is on.
 const canOpenEdit = (integration: IntegrationType) =>
   isFeatureEnabled(FEATURE_FLAG.DATA_REFLECTION) || integration.sub_type !== SyncDataType.NOCODB
 

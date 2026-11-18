@@ -15,7 +15,7 @@ const FEATURES = [
   {
     id: 'bases_v3',
     title: 'Projects V3',
-    description: 'Experience the next generation of Universal Database with Projects V3 with and enhanced performance and optimizations.',
+    description: 'Experience the next generation of UniversalDatabase with Projects V3 with and enhanced performance and optimizations.',
     enabled: false,
     version: 1,
   },
@@ -37,7 +37,7 @@ const FEATURES = [
   {
     id: 'ai_beta_features',
     title: 'AI beta features',
-    description: 'Unlock AI beta features to enhance your Universal Database experience.',
+    description: 'Unlock AI beta features to enhance your UniversalDatabase experience.',
     enabled: false,
     version: 2,
     isEngineering: true,
@@ -92,7 +92,7 @@ const FEATURES = [
   // {
   //   id: 'extensions',
   //   title: 'Extensions beta features',
-  //   description: 'Extensions allows you to add new features or functionalities to the Universal Database platform.',
+  //   description: 'Extensions allows you to add new features or functionalities to the UniversalDatabase platform.',
   //   enabled: ncIsPlaywright(),
   //   version: 4,
   //   isEngineering: true,

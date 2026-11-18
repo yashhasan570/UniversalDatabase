@@ -1,5 +1,5 @@
 import { IntegrationWrapper } from '../integration';
-import { UniversalDatabaseSDK } from '../sdk';
+import { NocoSDK } from '../sdk';
 import type { UniversalDatabaseContext } from '../universaldatabase';
 import { WorkflowNodeDefinition, WorkflowNodeCategory, WorkflowNodeCategoryType, VariableDefinition, TriggerActivationType, TriggerTestMode, LoopContext } from 'universaldatabase-sdk'
 
@@ -303,7 +303,7 @@ export abstract class WorkflowNodeIntegration<TConfig extends WorkflowNodeConfig
    * @param runtimeInputs - Optional runtime data with interpolated config and actual outputs
    */
   public async generateInputVariables?(
-    context: UniversalDatabaseSDK.VariableGeneratorContext,
+    context: NocoSDK.VariableGeneratorContext,
     runtimeInputs?: any,
   ): Promise<VariableDefinition[]>;
 
@@ -316,7 +316,7 @@ export abstract class WorkflowNodeIntegration<TConfig extends WorkflowNodeConfig
    * @param runtimeInputs - Optional runtime data with interpolated config and actual outputs
    */
   public async generateOutputVariables?(
-    context: UniversalDatabaseSDK.VariableGeneratorContext,
+    context: NocoSDK.VariableGeneratorContext,
     runtimeInputs?: any,
   ): Promise<VariableDefinition[]>;
 

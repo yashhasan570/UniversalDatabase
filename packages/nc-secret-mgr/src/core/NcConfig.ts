@@ -76,7 +76,7 @@ export class NcConfig {
   }
 }
 
-export const getUniversalDatabaseConfig = async (
+export const getNocoConfig = async (
   options: {
     ncDb?: string;
     ncDbJson?: string;
@@ -97,7 +97,7 @@ export const getUniversalDatabaseConfig = async (
       process.env.DATABASE_URL_FILE,
   });
 
-  // create UniversalDatabaseConfig using utility method which works similar to Universal Database NcConfig with only meta db config
+  // create NocoConfig using utility method which works similar to UniversalDatabase NcConfig with only meta db config
   return NcConfig.create({
     meta: {
       metaUrl: process.env.NC_DB || options.ncDb,

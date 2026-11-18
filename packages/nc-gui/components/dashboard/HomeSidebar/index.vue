@@ -84,8 +84,8 @@ function onNavClick(item: NavItem) {
       class="w-full px-2 py-1.5 flex items-center justify-between gap-2 h-[var(--topbar-height)] flex-none border-b-1 border-nc-border-gray-light"
     >
       <div class="pl-1">
-        <img v-if="isDark" alt="Universal Database" src="~/assets/img/brand/full-logo.png" class="h-9" />
-        <img v-else alt="Universal Database" src="~/assets/img/brand/universaldatabase-full-color.png" class="h-9" />
+        <img v-if="isDark" alt="UniversalDatabase" src="~/assets/img/brand/full-logo.png" class="h-9" />
+        <img v-else alt="UniversalDatabase" src="~/assets/img/brand/universaldatabase-full-color.png" class="h-9" />
       </div>
 
       <!-- Only in the collapsed (peek) state, where it re-docks the sidebar. -->

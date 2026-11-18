@@ -253,7 +253,7 @@ export const getFormattedViewTabTitle = ({
   isSharedView?: boolean
 }) => {
   if (isSharedView) {
-    return viewName || 'Universal Database'
+    return viewName || 'UniversalDatabase'
   }
 
   let title = `${viewName} | ${tableName} | ${baseName}`

@@ -79,7 +79,7 @@ const { currentRow, state } = useSmartsheetRowStoreOrThrow()
 
 const baseStore = useBase()
 
-const { generatingRows, generatingColumns } = useUniversalDatabaseAi()
+const { generatingRows, generatingColumns } = useNocoAi()
 
 const { showNull } = useGlobal()
 

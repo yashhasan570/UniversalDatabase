@@ -15,7 +15,7 @@ const { activeView, views, isListViewEnabled } = storeToRefs(viewsStore)
 
 const { navigateToView, onOpenViewCreateModal, showUpgradeToUseListView } = viewsStore
 
-const { isAiFeaturesEnabled } = useUniversalDatabaseAi()
+const { isAiFeaturesEnabled } = useNocoAi()
 
 const {
   showEEFeatures,
@@ -343,7 +343,7 @@ async function onOpenModal({
                     <a-menu-item data-testid="sidebar-view-create-ai" @click="onOpenModal({ type: 'AI' })">
                       <div class="nc-viewlist-submenu-popup-item">
                         <GeneralIcon icon="ncAutoAwesome" class="!w-4 !h-4 text-nc-fill-purple-dark" />
-                        <div>{{ $t('labels.useUniversalDatabaseAI') }}</div>
+                        <div>{{ $t('labels.useNocoAI') }}</div>
                       </div>
                     </a-menu-item>
                   </NcTooltip>

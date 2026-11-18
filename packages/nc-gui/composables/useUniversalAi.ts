@@ -2,7 +2,7 @@ import { BaseVersion, type IntegrationType, type SerializedAiViewType, type Tabl
 
 const aiIntegrationNotFound = 'AI integration not found'
 
-export const useUniversalDatabaseAi = createSharedComposable(() => {
+export const useNocoAi = createSharedComposable(() => {
   const { $api, $poller } = useNuxtApp()
 
   const { handleAiCreditError, handleAiCreditErrorRaw } = useCredits()
@@ -29,7 +29,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
 
   const aiIntegrationAvailable = computed(() => !!aiIntegrations.value.length)
 
-  const isUniversalDatabaseAiAvailable = computed(() => aiIntegrations.value.some((integration) => integration.id?.startsWith('global_')))
+  const isNocoAiAvailable = computed(() => aiIntegrations.value.some((integration) => integration.id?.startsWith('global_')))
 
   const isAiIntegrationAvailableInList = (integrationId?: string) => {
     if (!aiIntegrationAvailable.value) return false
@@ -66,7 +66,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
       }
 
       if (!skipMsgToast) {
-        message.warning(error || 'UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+        message.warning(error || 'NocoAI: Underlying GPT API are busy. Please try after sometime.')
       }
     } finally {
       aiLoading.value = false
@@ -102,7 +102,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
       }
 
       if (!skipMsgToast) {
-        message.warning(error || 'UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+        message.warning(error || 'NocoAI: Underlying GPT API are busy. Please try after sometime.')
       }
     } finally {
       aiLoading.value = false
@@ -140,7 +140,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
       }
 
       if (!skipMsgToast) {
-        message.warning(error || 'UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+        message.warning(error || 'NocoAI: Underlying GPT API are busy. Please try after sometime.')
       }
     } finally {
       aiLoading.value = false
@@ -254,7 +254,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
         await onTableCreate?.(res[0])
       }
     } catch (e: any) {
-      message.warning('UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+      message.warning('NocoAI: Underlying GPT API are busy. Please try after sometime.')
     }
   }
 
@@ -274,7 +274,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
       return res
     } catch (e: any) {
       console.error(e)
-      message.warning('UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+      message.warning('NocoAI: Underlying GPT API are busy. Please try after sometime.')
     }
   }
 
@@ -414,7 +414,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
       }
 
       if (!skipMsgToast) {
-        message.warning(error || 'UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.')
+        message.warning(error || 'NocoAI: Underlying GPT API are busy. Please try after sometime.')
       }
     } finally {
       aiLoading.value = false
@@ -442,7 +442,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
     } catch (e) {
       if (!(await handleAiCreditError(e))) {
         message.warning(
-          (await extractSdkResponseErrorMsg(e)) || 'UniversalDatabaseAI: Underlying GPT API are busy. Please try after sometime.',
+          (await extractSdkResponseErrorMsg(e)) || 'NocoAI: Underlying GPT API are busy. Please try after sometime.',
         )
       }
       throw e
@@ -543,7 +543,7 @@ export const useUniversalDatabaseAi = createSharedComposable(() => {
 
   return {
     aiIntegrationAvailable,
-    isUniversalDatabaseAiAvailable,
+    isNocoAiAvailable,
     isAiIntegrationAvailableInList,
     aiLoading,
     aiError,

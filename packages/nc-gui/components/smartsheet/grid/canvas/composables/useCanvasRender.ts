@@ -306,7 +306,7 @@ export function useCanvasRender({
   }
 
   // Canvas can't read CSS vars; when a white-label brand colour is set, tint the
-  // row/column selection from it instead of the hardcoded Universal Database blue.
+  // row/column selection from it instead of the hardcoded UniversalDatabase blue.
   const { brandColor } = useBranding()
 
   const { isRowColouringEnabled } = useViewRowColorRender()
@@ -1687,7 +1687,7 @@ export function useCanvasRender({
 
   function _updateRowColors() {
     // When white-labelled with a brand colour, derive both selection tints from
-    // the brand ramp; otherwise keep the exact default Universal Database blues.
+    // the brand ramp; otherwise keep the exact default UniversalDatabase blues.
     const whiteLabelled = !!brandColor.value
     _rowColors = {
       selectionBg: whiteLabelled ? getColor(themeV4Colors.brand['50']) : getColor('#F6F7FE', themeV4Colors.brand['50']),

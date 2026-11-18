@@ -16,7 +16,7 @@ const brandIcon = computed(() => {
     <div class="flex flex-col items-center gap-5 mx-4" :class="containerClass">
       <slot name="icon">
         <img v-if="brandIcon" width="48" :alt="productName" :src="brandIcon" class="object-contain" />
-        <img v-else width="48" alt="Universal Database" src="~/assets/img/icons/256x256.png" />
+        <img v-else width="48" alt="UniversalDatabase" src="~/assets/img/icons/256x256.png" />
       </slot>
 
       <div class="text-xl text-nc-content-gray font-bold">

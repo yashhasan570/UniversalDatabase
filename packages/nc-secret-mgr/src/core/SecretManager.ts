@@ -63,7 +63,7 @@ export class SecretManager {
       ))
     ) {
       throw new NcError(
-        'Looks like you are using an older version of Universal Database. Please upgrade to the latest version and try again.',
+        'Looks like you are using an older version of UniversalDatabase. Please upgrade to the latest version and try again.',
       );
     }
 

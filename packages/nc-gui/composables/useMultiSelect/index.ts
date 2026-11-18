@@ -90,7 +90,7 @@ export function useMultiSelect(
 
   const { internalGet } = useInternalBatch()
 
-  const { fillRows } = useUniversalDatabaseAi()
+  const { fillRows } = useNocoAi()
 
   const { isDataReadOnly } = useRoles()
 
@@ -1156,7 +1156,7 @@ export function useMultiSelect(
     if (clipboardData?.endsWith('\n')) {
       // Remove '\n' from the end of the clipboardData
       // When copying from XLS/XLSX files, there is an extra '\n' appended to the end
-      //   this overwrites one additional cell information when we paste in Universal Database
+      //   this overwrites one additional cell information when we paste in UniversalDatabase
       clipboardData = clipboardData.replace(/\n$/, '')
     }
 

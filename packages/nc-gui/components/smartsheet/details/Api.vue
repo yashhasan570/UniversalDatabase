@@ -45,7 +45,7 @@ const langs = [
     icon: iconMap.langNode,
   },
   {
-    name: 'Universal Database-SDK',
+    name: 'UniversalDatabase-SDK',
     clients: ['javascript', 'node'],
     icon: iconMap.langNocodbSdk,
   },
@@ -125,7 +125,7 @@ const snippet = computed(
 const activeLang = computed(() => langs.find((lang) => lang.name === selectedLangName.value))
 
 const code = computed(() => {
-  if (activeLang.value?.name === 'Universal Database-SDK') {
+  if (activeLang.value?.name === 'UniversalDatabase-SDK') {
     return `${selectedClient.value === 'node' ? 'const { Api } = require("universaldatabase-sdk");' : 'import { Api } from "universaldatabase-sdk";'}
 
 const api = new Api({

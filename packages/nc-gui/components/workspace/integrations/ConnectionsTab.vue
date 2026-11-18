@@ -124,7 +124,7 @@ const isLoadingGetLinkedSources = ref(false)
 const isBaseAssignmentOpen = ref(false)
 const baseAssignmentIntegration = ref<IntegrationType | null>(null)
 
-// The Universal Database row is injected client-side with a placeholder id (`nc-data-reflection`) and has no
+// The UniversalDatabase row is injected client-side with a placeholder id (`nc-data-reflection`) and has no
 // integration record, so the base-assignment endpoints 404 on it.
 function canManageBaseAccess(integration: IntegrationType) {
   return integration.sub_type !== SyncDataType.NOCODB
@@ -581,7 +581,7 @@ const customRow = (record: Record<string, any>) => ({
             <div class="h-8 w-8 grid place-items-center">
               <GeneralIcon icon="universaldatabase1" />
             </div>
-            <div class="text-sm !leading-5 capitalize font-semibold truncate">Universal Database Cloud</div>
+            <div class="text-sm !leading-5 capitalize font-semibold truncate">UniversalDatabase Cloud</div>
           </div>
           <NcTooltip v-else :disabled="!isUserDeleted(integration.created_by)" class="w-full">
             <template #title>

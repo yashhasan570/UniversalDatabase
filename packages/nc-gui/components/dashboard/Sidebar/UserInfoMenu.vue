@@ -138,7 +138,7 @@ const openKeyboardShortcutDialog = () => {
 
       <NcDivider />
 
-      <!-- Use Universal Database from AI tools -->
+      <!-- Use UniversalDatabase from AI tools -->
       <DashboardSidebarConnectAiMenuOption @close-menu="emits('closeMenu')" />
 
       <!-- API Tokens -->

@@ -165,7 +165,7 @@ const prefixVariableKeysRecursive = (variable: any, prefix: string): any => {
 
 /**
  * Generate a unique node title based on the node type title
- * E.g., 'Universal Database', 'Universal Database1', 'Universal Database2', etc.
+ * E.g., 'UniversalDatabase', 'UniversalDatabase1', 'UniversalDatabase2', etc.
  */
 const generateUniqueNodeTitle = (nodeMeta: UIWorkflowNodeDefinition, nodes: Node[]): string => {
   const baseTitle = nodeMeta.title

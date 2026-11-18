@@ -44,7 +44,7 @@ const {
   isXcdbBase,
 } = useColumnCreateStoreOrThrow()
 
-const { isAiBetaFeaturesEnabled, aiIntegrationAvailable, generateRows } = useUniversalDatabaseAi()
+const { isAiBetaFeaturesEnabled, aiIntegrationAvailable, generateRows } = useNocoAi()
 
 const previewRow = ref<Row>({
   row: {},

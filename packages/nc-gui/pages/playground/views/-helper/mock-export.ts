@@ -58,7 +58,7 @@ async function fileContent(type: string, title: string, columns: ColumnType[], r
           ].join('\r\n'),
         )
       return new Blob(
-        [['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Universal Database//Playground//EN', ...events, 'END:VCALENDAR'].join('\r\n')],
+        [['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//UniversalDatabase//Playground//EN', ...events, 'END:VCALENDAR'].join('\r\n')],
         {
           type: 'text/calendar',
         },

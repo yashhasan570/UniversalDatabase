@@ -1,7 +1,7 @@
 import type { Api as BaseAPI } from 'universaldatabase-sdk'
 import type { UseEventBusReturn } from '@vueuse/core'
 import type { UseGlobalReturn } from './composables/useGlobal/types'
-import type { UniversalDatabaseI18n } from './lib'
+import type { NocoI18n } from './lib'
 import type { TabType } from './composables'
 
 declare module '#app' {
@@ -52,7 +52,7 @@ declare module '#app' {
 
 declare module '@vue/runtime-core' {
   interface App {
-    i18n: UniversalDatabaseI18n
+    i18n: NocoI18n
   }
 }
 

@@ -106,7 +106,7 @@ function usd(value: number) {
     <div
       class="w-12 flex-none flex flex-col items-center gap-3 pt-3 border-r-1 border-nc-border-gray-medium bg-nc-bg-gray-extralight"
     >
-      <GeneralUniversalDatabaseIcon inline :size="26" />
+      <GeneralNocoIcon inline :size="26" />
       <span class="mt-1 w-8 h-8 rounded-lg flex items-center justify-center bg-nc-bg-brand text-nc-content-brand">
         <GeneralIcon icon="ncDatabase" class="w-4 h-4" />
       </span>

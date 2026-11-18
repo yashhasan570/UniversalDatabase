@@ -103,7 +103,7 @@ export const DARK_PALETTE_PRESETS: DarkPalettePreset[] = [
   {
     /** classic (pre-refactor) production dark palette — this one IS variables.css */
     id: 'classic',
-    label: 'Universal Database classic',
+    label: 'UniversalDatabase classic',
     values: {
       minisidebar: '#2a2c2e',
       sidebar: '#1d1d1f',
@@ -124,7 +124,7 @@ export const DARK_PALETTE_PRESETS: DarkPalettePreset[] = [
     },
   },
   {
-    /** reference-hue elevation model — the new Universal Database dark theme (WIP name) */
+    /** reference-hue elevation model — the new UniversalDatabase dark theme (WIP name) */
     id: 'elevated',
     label: 'Elevated',
     values: {

@@ -242,9 +242,9 @@ onUnmounted(() => {
       <GeneralIcon icon="universaldatabase1" class="w-6 h-6" @dblclick="advancedOptionsCounter++" />
 
       <span v-if="step === 1">
-        {{ $t('title.quickImportUniversal Database') }}
+        {{ $t('title.quickImportNocoDB') }}
       </span>
-      <span v-else-if="isInProgress"> {{ `${$t('labels.importingFromUniversal Database')}...` }} </span>
+      <span v-else-if="isInProgress"> {{ `${$t('labels.importingFromNocoDB')}...` }} </span>
       <span v-else> {{ $t('labels.nocoDBBaseImported') }} </span>
 
       <a
@@ -266,7 +266,7 @@ onUnmounted(() => {
       <div class="text-nc-content-gray-subtle2 text-sm px-2">
         <p class="mb-2">{{ $t('msg.info.migrateBaseSteps') }}:</p>
         <ol class="list-decimal list-inside mt-2 pl-1">
-          <li>{{ $t('general.open') }} <strong>settings</strong> in your Universal Database project</li>
+          <li>{{ $t('general.open') }} <strong>settings</strong> in your UniversalDatabase project</li>
           <li>
             Navigate to <strong>{{ $t('general.migrate') }}</strong> tab
           </li>

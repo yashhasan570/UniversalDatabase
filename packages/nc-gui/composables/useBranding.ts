@@ -1,11 +1,11 @@
 import type { WhiteLabelConfig } from 'universaldatabase-sdk'
 
 /**
- * Default (Universal Database) branding values. Exported so EE callers can fall back to
+ * Default (UniversalDatabase) branding values. Exported so EE callers can fall back to
  * these for any field the white-label config leaves null.
  */
 export const DEFAULT_BRANDING = {
-  productName: 'Universal Database',
+  productName: 'UniversalDatabase',
   logoUrl: null as string | null,
   logoDarkUrl: null as string | null,
   faviconUrl: null as string | null,
@@ -14,7 +14,7 @@ export const DEFAULT_BRANDING = {
 }
 
 /**
- * CE stub — white-label is EE-only, so CE always returns Universal Database defaults.
+ * CE stub — white-label is EE-only, so CE always returns UniversalDatabase defaults.
  * EE override at ee/composables/useBranding.ts reads appInfo.whiteLabel.
  */
 export const useBranding = createSharedComposable(() => {

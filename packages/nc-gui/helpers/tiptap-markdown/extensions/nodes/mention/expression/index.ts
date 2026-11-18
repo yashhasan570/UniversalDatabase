@@ -84,7 +84,7 @@ export const WorkflowExpression = TipTapMention.extend({
       serialize(node: any) {
         return node.attrs.expression || ''
       },
-      // Parse Universal Database expression format
+      // Parse UniversalDatabase expression format
       parse(text: string) {
         const expressionRegex = /\{\{([^}]+)}}/g
         const matches = text.matchAll(expressionRegex)

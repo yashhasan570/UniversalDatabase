@@ -223,7 +223,7 @@ const results = computed<CmdCommand[]>(() => {
   const covered = new Set(leadFallbacks.value.flatMap((c) => (c.dedupeKey ? [c.dedupeKey] : [])))
   const matches = covered.size ? found.filter((c) => !c.dedupeKey || !covered.has(c.dedupeKey)) : found
 
-  // A request leads with "Ask UniversalDatabaseAI"; a command-like query keeps its matches and echo rows first.
+  // A request leads with "Ask NocoAI"; a command-like query keeps its matches and echo rows first.
   const ai = aiRow.value
   // A fallback row still working (it can be cancelled) holds the list until it settles.
   if (ai?.loading && ai.cancel) return [ai]

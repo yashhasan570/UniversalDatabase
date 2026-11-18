@@ -19,11 +19,11 @@ const { getPossibleAttachmentSrc } = useAttachment()
 
 const supportedDocs: SupportedDocsType[] = [
   {
-    title: 'Universal Database OAuth Client Setup',
+    title: 'UniversalDatabase OAuth Client Setup',
     href: 'https://docs.universaldatabase.com/nc-gui/oauth-client-setup',
   },
   {
-    title: 'Universal Database OAuth Client Setup',
+    title: 'UniversalDatabase OAuth Client Setup',
     href: 'https://docs.universaldatabase.com/nc-gui/oauth-client-setup',
   },
 ]

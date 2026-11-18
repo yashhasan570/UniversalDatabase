@@ -67,7 +67,7 @@ function detail(index: number, d: Deal) {
     <div
       class="w-12 flex-none flex flex-col items-center gap-3 pt-3 border-r-1 border-nc-border-gray-medium bg-nc-bg-gray-extralight"
     >
-      <GeneralUniversalDatabaseIcon inline :size="26" />
+      <GeneralNocoIcon inline :size="26" />
       <GeneralIcon icon="ncDatabase" class="mt-1 w-4 h-4 text-nc-content-gray-muted" />
       <span class="w-8 h-8 rounded-lg flex items-center justify-center bg-nc-bg-brand text-nc-content-brand">
         <GeneralIcon icon="ncAutomation" class="w-4 h-4" />

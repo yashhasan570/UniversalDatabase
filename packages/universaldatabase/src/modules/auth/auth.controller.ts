@@ -1,0 +1,372 @@
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  Logger,
+  Param,
+  Post,
+  Req,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+import { Response } from 'express';
+import { AuthGuard } from '@nestjs/passport';
+import { ConfigService } from '@nestjs/config';
+import { AppEvents, extractRolesObj } from 'universaldatabase-sdk';
+import { PresignedUrl } from 'src/models';
+import type { UserType } from 'universaldatabase-sdk';
+import type { AppConfig } from '~/interface/config';
+
+import { UsersService } from '~/services/users/users.service';
+import { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import {
+  clearAuthCookie,
+  genJwt,
+  setAuthCookie,
+} from '~/services/users/helpers';
+
+import { GlobalGuard } from '~/guards/global/global.guard';
+import { NcError } from '~/helpers/catchError';
+import { getApiTokenFromHeader } from '~/helpers/apiHelpers';
+import { Acl } from '~/middlewares/extract-ids/extract-ids.middleware';
+import { MetaApiLimiterGuard } from '~/guards/meta-api-limiter.guard';
+import { PublicApiLimiterGuard } from '~/guards/public-api-limiter.guard';
+import { NcRequest } from '~/interface/config';
+import UniversalDatabase from '~/UniversalDatabase';
+
+@Controller()
+export class AuthController {
+  protected logger = new Logger(AuthController.name);
+
+  constructor(
+    protected readonly usersService: UsersService,
+    protected readonly appHooksService: AppHooksService,
+    protected readonly config: ConfigService<AppConfig>,
+  ) {}
+
+  @Post([
+    '/auth/user/signup',
+    '/api/v1/db/auth/user/signup',
+    '/api/v1/auth/user/signup',
+    '/api/v2/auth/user/signup',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async signup(@Req() req: NcRequest, @Res() res: Response): Promise<any> {
+    if (this.config.get('auth', { infer: true }).disableEmailAuth) {
+      NcError.forbidden('Email authentication is disabled');
+    }
+    const result = await this.usersService.signup({
+      body: req.body,
+      req,
+      res,
+    });
+    if (result?.token) setAuthCookie(res, result.token);
+    res.json(result);
+  }
+
+  @Post([
+    '/auth/token/refresh',
+    '/api/v1/db/auth/token/refresh',
+    '/api/v1/auth/token/refresh',
+    '/api/v2/auth/token/refresh',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async refreshToken(
+    @Req() req: NcRequest,
+    @Res() res: Response,
+  ): Promise<any> {
+    const result = await this.usersService.refreshToken({
+      body: req.body,
+      req,
+      res,
+    });
+    if (result?.token) setAuthCookie(res, result.token);
+    res.json(result);
+  }
+
+  @Post([
+    '/auth/user/signin',
+    '/api/v1/db/auth/user/signin',
+    '/api/v1/auth/user/signin',
+    '/api/v2/auth/user/signin',
+  ])
+  @UseGuards(PublicApiLimiterGuard, AuthGuard('local'))
+  @HttpCode(200)
+  async signin(@Req() req: NcRequest, @Res() res: Response) {
+    if (this.config.get('auth', { infer: true }).disableEmailAuth) {
+      NcError.forbidden('Email authentication is disabled');
+    }
+    await this.setRefreshToken({ req, res });
+    const result = await this.usersService.login(req.user, req);
+    setAuthCookie(res, result.token);
+    res.json(result);
+  }
+
+  @UseGuards(GlobalGuard)
+  @Post(['/api/v1/auth/user/signout', '/api/v2/auth/user/signout'])
+  @HttpCode(200)
+  async signOut(@Req() req: NcRequest, @Res() res: Response): Promise<any> {
+    if (!(req as any).isAuthenticated?.()) {
+      NcError.forbidden('Not allowed');
+    }
+    clearAuthCookie(res);
+    res.json(
+      await this.usersService.signOut({
+        req,
+        res,
+      }),
+    );
+  }
+
+  @Post(`/auth/google/genTokenByCode`)
+  @HttpCode(200)
+  @UseGuards(PublicApiLimiterGuard, AuthGuard('google'))
+  async googleSignin(@Req() req: NcRequest, @Res() res: Response) {
+    await this.setRefreshToken({ req, res });
+    const result = await this.usersService.login(req.user, req);
+    setAuthCookie(res, result.token);
+    res.json(result);
+  }
+
+  @Get('/auth/google')
+  @UseGuards(PublicApiLimiterGuard, AuthGuard('google'))
+  googleAuthenticate() {
+    // google strategy will take care the request
+  }
+
+  @Get([
+    '/auth/user/me',
+    '/api/v1/db/auth/user/me',
+    '/api/v1/auth/user/me',
+    // Deprecated: undocumented, not served by EE. Use /api/v1/auth/user/me.
+    '/api/v2/auth/user/me',
+  ])
+  @UseGuards(MetaApiLimiterGuard, GlobalGuard)
+  async me(@Req() req: NcRequest) {
+    if (req.route?.path === '/api/v2/auth/user/me') {
+      req.res?.setHeader('Deprecation', 'true');
+    }
+
+    // GlobalGuard silently falls back to a guest user when JWT validation
+    // fails. If the caller supplied a JWT (xc-auth header or nc_token cookie)
+    // and we ended up as guest, the token is invalid/expired — surface 401
+    // so the client can refresh or sign out instead of consuming a guest
+    // identity that flips the UI's session state mid-flight.
+    if ((req.user as any)?.roles?.guest) {
+      if (req.headers?.['xc-auth'] || req.cookies?.nc_token) {
+        NcError.unauthorized('Token Expired. Please login again.');
+      }
+      // A rejected API token (xc-token or Bearer) falls back to guest too.
+      if (getApiTokenFromHeader(req)) {
+        NcError.unauthorized('Invalid token');
+      }
+    }
+
+    const user = {
+      ...req.user,
+      roles: extractRolesObj(req.user.roles),
+      workspace_roles: extractRolesObj(req.user.workspace_roles),
+      base_roles: extractRolesObj(req.user.base_roles),
+    };
+
+    await PresignedUrl.signMetaIconImage(user);
+
+    return user;
+  }
+
+  @Post([
+    '/user/password/change',
+    '/api/v1/db/auth/password/change',
+    '/api/v1/auth/password/change',
+    '/api/v2/auth/password/change',
+  ])
+  @UseGuards(MetaApiLimiterGuard, GlobalGuard)
+  @Acl('passwordChange', {
+    scope: 'org',
+  })
+  @HttpCode(200)
+  async passwordChange(@Req() req: NcRequest, @Res() res): Promise<any> {
+    const ncError = NcError.get(req.context);
+    if (!(req as any).isAuthenticated?.()) {
+      ncError.forbidden('Not allowed');
+    }
+
+    const { sessionsRevoked } = await this.usersService.passwordChange({
+      user: req['user'],
+      req,
+      body: req.body,
+    });
+
+    // Re-issue the current device's session even if revoking the others
+    // failed. Not login(): that would audit a sign-in that never happened.
+    await this.setRefreshToken({ req, res });
+    setAuthCookie(res, genJwt(req.user as UserType, UniversalDatabase.getConfig()));
+
+    if (!sessionsRevoked) {
+      ncError.internalServerError(
+        "Your password was changed, but we couldn't sign out all other sessions or disconnect apps. To retry, change your password again using your new password as the current one.",
+      );
+    }
+
+    res.json({ msg: 'Password has been updated successfully' });
+  }
+
+  @Post([
+    '/api/v1/auth/user/signout-others',
+    '/api/v2/auth/user/signout-others',
+  ])
+  // The meta limiter skips cookie-only callers; the IP limiter covers them.
+  @UseGuards(PublicApiLimiterGuard, MetaApiLimiterGuard, GlobalGuard)
+  @Acl('signOutOtherSessions', {
+    scope: 'org',
+    blockApiTokenAccess: true,
+  })
+  @HttpCode(200)
+  async signOutOtherSessions(@Req() req: NcRequest, @Res() res: Response) {
+    const ncError = NcError.get(req.context);
+    if (!(req as any).isAuthenticated?.()) {
+      ncError.forbidden('Not allowed');
+    }
+
+    // Connected apps are disconnected unless the caller opts out.
+    const disconnectApps = req.body?.disconnectApps !== false;
+
+    let revokeError: unknown;
+    try {
+      await this.usersService.revokeAllSessions(req.user as UserType, {
+        revokeOAuthTokens: disconnectApps,
+      });
+    } catch (e) {
+      revokeError = e;
+    }
+
+    // Re-issue the current device's session even if a later revocation step
+    // failed, so the caller is not signed out by its own request.
+    // Not login(): that would audit a sign-in that never happened.
+    await this.setRefreshToken({ req, res });
+    const token = genJwt(req.user as UserType, UniversalDatabase.getConfig());
+    setAuthCookie(res, token);
+
+    if (revokeError) {
+      this.logger.error(
+        'Failed to sign out other sessions',
+        (revokeError as Error)?.stack,
+      );
+      ncError.internalServerError(
+        "Couldn't sign out other devices. Please try again.",
+      );
+    }
+
+    this.appHooksService.emit(AppEvents.USER_SESSIONS_REVOKE, {
+      user: req.user as UserType,
+      disconnectApps,
+      req,
+    });
+
+    res.json({ token });
+  }
+
+  @Post([
+    '/auth/password/forgot',
+    '/api/v1/db/auth/password/forgot',
+    '/api/v1/auth/password/forgot',
+    '/api/v2/auth/password/forgot',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async passwordForgot(@Req() req: NcRequest): Promise<any> {
+    await this.usersService.passwordForgot({
+      siteUrl: (req as any).ncSiteUrl,
+      body: req.body,
+      req,
+    });
+
+    return { msg: 'Please check your email to reset the password' };
+  }
+
+  @Post([
+    '/auth/token/validate/:tokenId',
+    '/api/v1/db/auth/token/validate/:tokenId',
+    '/api/v1/auth/token/validate/:tokenId',
+    '/api/v2/auth/token/validate/:tokenId',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async tokenValidate(@Param('tokenId') tokenId: string): Promise<any> {
+    await this.usersService.tokenValidate({
+      token: tokenId,
+    });
+    return { msg: 'Token has been validated successfully' };
+  }
+
+  @Post([
+    '/auth/password/reset/:tokenId',
+    '/api/v1/db/auth/password/reset/:tokenId',
+    '/api/v1/auth/password/reset/:tokenId',
+    '/api/v2/auth/password/reset/:tokenId',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async passwordReset(
+    @Req() req: NcRequest,
+    @Param('tokenId') tokenId: string,
+    @Body() body: any,
+  ): Promise<any> {
+    const { appsDisconnected } = await this.usersService.passwordReset({
+      token: tokenId,
+      body: body,
+      req,
+    });
+
+    if (body?.disconnectApps && !appsDisconnected) {
+      return {
+        msg: "Your password was reset, but we couldn't disconnect apps. Sign in and change your password with 'Also disconnect apps' ticked.",
+        appsDisconnected,
+      };
+    }
+
+    return { msg: 'Password has been reset successfully', appsDisconnected };
+  }
+
+  @Post([
+    '/api/v1/db/auth/email/validate/:tokenId',
+    '/api/v1/auth/email/validate/:tokenId',
+    '/api/v2/auth/email/validate/:tokenId',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  @HttpCode(200)
+  async emailVerification(
+    @Req() req: NcRequest,
+    @Param('tokenId') tokenId: string,
+  ): Promise<any> {
+    await this.usersService.emailVerification({
+      token: tokenId,
+      req,
+    });
+
+    return { msg: 'Email has been verified successfully' };
+  }
+
+  @Get([
+    '/api/v1/db/auth/password/reset/:tokenId',
+    '/api/v2/db/auth/password/reset/:tokenId',
+    '/auth/password/reset/:tokenId',
+  ])
+  @UseGuards(PublicApiLimiterGuard)
+  async renderPasswordReset(
+    @Req() req: NcRequest,
+    @Res() res: Response,
+    @Param('tokenId') tokenId: string,
+  ): Promise<any> {
+    // the emailed link opens the app's reset page; a non-root dashboard path is redirected to the root by UniversalDatabase
+    const dashboardUrl = (req.dashboardUrl || '/').replace(/\/+$/, '');
+    res.redirect(`${dashboardUrl}/reset/${encodeURIComponent(tokenId)}`);
+  }
+
+  async setRefreshToken({ res, req }) {
+    await this.usersService.setRefreshToken({ res, req });
+  }
+}

@@ -5,7 +5,7 @@ import { playgroundNav } from './-helper/registry'
 <template>
   <div class="max-w-6xl mx-auto p-8">
     <div class="mb-8">
-      <h1 class="text-heading3 text-nc-content-gray-emphasis mb-1">Universal Database Playground</h1>
+      <h1 class="text-heading3 text-nc-content-gray-emphasis mb-1">UniversalDatabase Playground</h1>
       <p class="text-body text-nc-content-gray-subtle max-w-2xl">
         Every design-system building block and the main product surfaces in one place. Open <b>Tokens</b> in the top bar to change
         the brand colour, grays, font, radii or any CSS variable — every page here, including the live app frames, updates as you

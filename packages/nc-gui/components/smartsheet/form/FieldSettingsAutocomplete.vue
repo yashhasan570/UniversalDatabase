@@ -21,7 +21,7 @@ const columnSupportsAutocomplete = computed(() => {
   return true
 })
 
-// HTML spec control groups mapped to Universal Database UITypes
+// HTML spec control groups mapped to UniversalDatabase UITypes
 // See: https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#autofilling-form-controls:-the-autocomplete-attribute
 type AutocompleteControlGroup = 'text' | 'multiline' | 'password' | 'url' | 'email' | 'tel'
 

@@ -27,7 +27,7 @@ const { isEditColumn } = toRefs(props)
 
 const { $api } = useNuxtApp()
 
-const { aiIntegrations } = useUniversalDatabaseAi()
+const { aiIntegrations } = useNocoAi()
 
 const lastIntegrationId = ref<string | null>(null)
 
