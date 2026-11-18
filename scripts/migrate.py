@@ -49,19 +49,31 @@ def display(t):
     return t
 
 
+def fixname(name):
+    # Mirror the string sweep exactly so file names match the strings that
+    # reference them: bare Noco -> UniversalDatabase, compound NocoFoo keeps
+    # its name (the string sweep leaves it untouched too).
+    name = name.replace("NOCODB_", "UNIVERSALDATABASE_")
+    name = name.replace("nocodb", "universaldatabase")
+    name = name.replace("NocoDB", "UniversalDatabase")
+    name = re.sub(r"\bnoco\b", "universaldatabase", name)
+    name = re.sub(r"\bNoco\b", "UniversalDatabase", name)
+    return name
+
+
 def rename_paths():
     # Files first, then dirs deepest-first so children keep valid paths
     for p in sorted(list(Path(".").rglob("*"))):
         if ".git" in p.parts or p.is_dir():
             continue
-        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal").replace("noco-", "universaldatabase-").replace("noco.", "universaldatabase.")
+        nb = fixname(p.name)
         if nb != p.name:
             p.rename(p.with_name(nb))
     dirs = sorted([p for p in Path(".").rglob("*") if ".git" not in p.parts and p.is_dir()
                    and ("nocodb" in p.name or "Noco" in p.name)],
                   key=lambda p: len(p.parts), reverse=True)
     for p in dirs:
-        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal").replace("noco-", "universaldatabase-").replace("noco.", "universaldatabase.")
+        nb = fixname(p.name)
         if nb != p.name:
             tgt = p.with_name(nb)
             if tgt.exists():
