@@ -63,7 +63,10 @@ def rename_paths():
     for p in dirs:
         nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
         if nb != p.name:
-            p.rename(p.with_name(nb))
+            tgt = p.with_name(nb)
+            if tgt.exists():
+                shutil.rmtree(tgt, ignore_errors=True)
+            p.rename(tgt)
 
 
 def main():
