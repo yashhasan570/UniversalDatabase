@@ -54,14 +54,14 @@ def rename_paths():
     for p in sorted(list(Path(".").rglob("*"))):
         if ".git" in p.parts or p.is_dir():
             continue
-        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
+        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal").replace("noco-", "universaldatabase-").replace("noco.", "universaldatabase.")
         if nb != p.name:
             p.rename(p.with_name(nb))
     dirs = sorted([p for p in Path(".").rglob("*") if ".git" not in p.parts and p.is_dir()
                    and ("nocodb" in p.name or "Noco" in p.name)],
                   key=lambda p: len(p.parts), reverse=True)
     for p in dirs:
-        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal")
+        nb = p.name.replace("nocodb", "universaldatabase").replace("Noco", "Universal").replace("noco-", "universaldatabase-").replace("noco.", "universaldatabase.")
         if nb != p.name:
             tgt = p.with_name(nb)
             if tgt.exists():
