@@ -18,6 +18,7 @@ import {
   isHiddenCol,
   isLinksOrLTAR,
   isReadOnlyColumn,
+  isSingleRecordLinkColumn,
   isSystemColumn,
   isVirtualCol,
 } from 'universaldatabase-sdk'
@@ -122,7 +123,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
     const { getMetaByKey } = useMetas()
 
     const activeView = inject(ActiveViewInj, ref())
-    const { comments, resolveComment, loadComments, updateComment, deleteComment, saveComment, isCommentsLoading } =
+    const { comments, reactions, resolveComment, loadComments, updateComment, deleteComment, saveComment, isCommentsLoading } =
       useProvideRowComments(meta, row)
 
     const { isUIAllowed } = useRoles()
@@ -145,6 +146,18 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
       return fieldId && isAllowed(PermissionEntity.FIELD, fieldId, PermissionKey.RECORD_FIELD_EDIT)
     }
 
+    const { metas: metasMap } = useMetas()
+    const { ensureLinkedMetas } = useLinkedRecordMetas()
+
+    watch(
+      () => [row?.value?.row, meta?.value?.id],
+      () => {
+        const col = meta?.value?.columns?.find((c) => c.pv)
+        if (col && isSingleRecordLinkColumn(col)) ensureLinkedMetas(row.value?.row, meta.value)
+      },
+      { immediate: true },
+    )
+
     // getters
     const displayValue = computed(() => {
       if (row?.value?.row) {
@@ -153,6 +166,9 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
         if (!col) {
           return
         }
+
+        // a single-record link pv resolves to its leaf text
+        if (isSingleRecordLinkColumn(col)) return recordTitleOf(row.value.row, meta.value, metasMap.value)
 
         return row.value.row?.[col.title as string]
       }
@@ -1100,13 +1116,23 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
 
               if (primaryKey.value && `${id}` === `${primaryKey.value}`) {
                 const commentId = payload.id
+
+                if (action === 'reaction') {
+                  reactions.value = { ...reactions.value, [commentId]: payload.reactions ?? [] }
+                  return
+                }
+
                 const user = baseUsers.value.find((u) => u.id === payload.created_by)
+                const resolvedUser = payload.resolved_by ? baseUsers.value.find((u) => u.id === payload.resolved_by) : undefined
                 const finalPayload = {
                   ...payload,
                   created_display_name: user?.display_name,
                   created_display_name_short: extractUserDisplayNameOrEmail(user),
                   created_by_email: user?.email,
                   created_by_meta: user?.meta,
+                  resolved_display_name: resolvedUser?.display_name,
+                  resolved_display_name_short: extractUserDisplayNameOrEmail(resolvedUser),
+                  resolved_by_meta: resolvedUser?.meta,
                 }
 
                 if (action === 'add') {

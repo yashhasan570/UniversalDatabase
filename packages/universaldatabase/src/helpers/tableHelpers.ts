@@ -13,7 +13,7 @@ import {
   personalAgentRole,
   ProjectRoles,
 } from 'universaldatabase-sdk';
-import { isLinksOrLTAR, UITypes } from 'universaldatabase-sdk';
+import { isLinksOrLTAR, isSingleRecordLinkColumn, UITypes } from 'universaldatabase-sdk';
 import type { AgentRoleCap, NcRequest, UserType } from 'universaldatabase-sdk';
 import type {
   LinkToAnotherRecordColumn,
@@ -39,6 +39,10 @@ import {
 import { DriverClient } from '~/utils/nc-config';
 import { isEE } from '~/utils';
 import { isSharedViewAccess } from '~/helpers/accessSource';
+import {
+  DISPLAY_VALUE_LINK_MAX_DEPTH,
+  getDisplayValueOfRefTable,
+} from '~/helpers/displayValueCycle';
 
 export const repopulateCreateTableSystemColumns = (
   _context: NcContext,
@@ -408,6 +412,18 @@ export async function hasTableVisibilityRule(
 const linkTargetVerdicts = new WeakMap<object, Map<string, Promise<boolean>>>();
 
 /**
+ * Whether `isLinkTargetHidden` can hide anything from this requester: a read
+ * with no user that is not a public share (jobs, webhooks), or a service
+ * user, is never limited.
+ */
+export function canHideLinkTargets(context: NcContext): boolean {
+  const publicShare =
+    isSharedViewAccess(context) ||
+    context.access_source === NcAccessSource.SHARED_BASE;
+  return !context.user ? publicShare : !isServiceUser(context.user);
+}
+
+/**
  * Whether a link's related table is hidden from the requester. Unlike
  * `hasLimitedLinkTargetAccess`, a shared view is not limited by itself, and a
  * read with no user that is not a public share (jobs, webhooks) is not limited.
@@ -416,10 +432,7 @@ export async function isLinkTargetHidden(
   context: NcContext,
   colOptions: LinkToAnotherRecordColumn,
 ): Promise<boolean> {
-  const publicShare =
-    isSharedViewAccess(context) ||
-    context.access_source === NcAccessSource.SHARED_BASE;
-  if (!context.user ? !publicShare : isServiceUser(context.user)) return false;
+  if (!canHideLinkTargets(context)) return false;
   if (
     context.access_source === NcAccessSource.SHARED_BASE &&
     colOptions.isCrossBaseLink()
@@ -581,10 +594,39 @@ export async function lookupChainHops(
     });
     hopContext = relatedBaseContext(hopContext, link);
   }
-  // A lookup of a link field also reads the table that link points to.
-  if (hops.length && current && isLinksOrLTAR(current)) {
+  // Past the last lookup, a link target reads the linked table and then follows that
+  // table's display value, as generateLookupSelectQuery does.
+  const seen = new Set<string>();
+  while (
+    hops.length &&
+    current &&
+    seen.size < DISPLAY_VALUE_LINK_MAX_DEPTH * 2 &&
+    !seen.has(current.id)
+  ) {
+    seen.add(current.id);
+    if (current.uidt === UITypes.Lookup) {
+      const colOptions = await current.getColOptions<LookupColumn>();
+      if (!colOptions || colOptions.error) break;
+      const relationColumn = await colOptions.getRelationColumn();
+      const link =
+        await relationColumn?.getColOptions<LinkToAnotherRecordColumn>();
+      if (!link) break;
+      hops.push({ context: hopContext, link, column: current });
+      current = await colOptions.getLookupColumn();
+      hopContext = relatedBaseContext(hopContext, link);
+      continue;
+    }
+    if (!isLinksOrLTAR(current)) break;
     const link = await current.getColOptions<LinkToAnotherRecordColumn>();
-    if (link) hops.push({ context: hopContext, link, column: current });
+    if (!link) break;
+    hops.push({ context: hopContext, link, column: current });
+    // a multi-record Links target reads as a count; a single-record one may carry
+    // on to the linked table's display value, so it must be checked as if it does
+    if (current.uidt === UITypes.Links && !isSingleRecordLinkColumn(current)) {
+      break;
+    }
+    current = await getDisplayValueOfRefTable(hopContext, current);
+    hopContext = relatedBaseContext(hopContext, link);
   }
   return hops;
 }

@@ -6,7 +6,6 @@ import {
   type LinkToAnotherRecordType,
   type LookupType,
   type TableType,
-  UITypesName,
   type ViewType,
   isColumnInError,
   isSupportedDisplayValueColumn,
@@ -49,7 +48,7 @@ const [useProvideViewGroupBy, useViewGroupBy] = useInjectionState(
   ) => {
     const groupByLimit = GROUP_BY_MAX_LEVELS
 
-    const { t } = useI18n()
+    const { t, te } = useI18n()
 
     const { api } = useApi()
 
@@ -69,7 +68,7 @@ const [useProvideViewGroupBy, useViewGroupBy] = useInjectionState(
 
     const { getEvaluatedRowMetaRowColorInfo } = useViewRowColorRender()
 
-    const { getMeta, getPartialMeta } = useMetas()
+    const { getMeta, getPartialMeta, metas } = useMetas()
 
     const sharedViewPassword = inject(SharedViewPasswordInj, ref(null))
 
@@ -164,7 +163,7 @@ const [useProvideViewGroupBy, useViewGroupBy] = useInjectionState(
           field.ncItemDisabled = true
           field.ncItemTooltip = isColumnInError(field)
             ? t('tooltip.groupingNotSupportedForFieldsWithErrors')
-            : `This Field of type ${UITypesName[field.uidt]} not supported for grouping`
+            : t('tooltip.groupingNotSupportedForField', { type: getColumnTypeI18nName(field, t, te) })
         } else {
           field.ncItemDisabled = false
           field.ncItemTooltip = ''
@@ -517,6 +516,11 @@ const [useProvideViewGroupBy, useViewGroupBy] = useInjectionState(
           group.displayValueProp =
             (displayValueCol || relatedTableMeta.columns?.find((c) => c.pv) || relatedTableMeta.columns?.[0])?.title || ''
           group.relatedPkProp = relatedTableMeta.columns?.find((c) => c.pk)?.title
+          group.relatedTableMeta = relatedTableMeta
+          // load hop metas when the display value is a single-record link
+          await resolveDisplayLeafColumn(relatedTableMeta, async (baseId, tableId) =>
+            getMeta({ baseId, tableIdOrTitle: tableId, disableError: true }),
+          )
         }
 
         const isSplit = isTimelineGroupSplit(view.value, groupby.column)
@@ -990,7 +994,15 @@ const [useProvideViewGroupBy, useViewGroupBy] = useInjectionState(
 
           return (
             g.key ===
-            valueToTitle(row.row[groupBy.value[nestLevel].column.title!], groupBy.value[nestLevel].column, group.displayValueProp)
+            valueToTitle(
+              row.row[groupBy.value[nestLevel].column.title!],
+              groupBy.value[nestLevel].column,
+              group.displayValueProp,
+              {
+                meta: group.relatedTableMeta,
+                metas: metas.value,
+              },
+            )
           )
         })
 

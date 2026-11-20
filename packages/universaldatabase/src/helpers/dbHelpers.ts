@@ -81,6 +81,8 @@ export function getSourceIntrospectionSchema(
 export type QueryWithCte = {
   builder: string | Knex.QueryBuilder;
   applyCte: (qb: Knex.QueryBuilder) => void;
+  /** PG only: the builder yields a JSON array (as text) of many values. */
+  aggregated?: boolean;
 };
 
 export function concatKnexRaw(knex: CustomKnex, raws: Knex.Raw[]) {
@@ -1263,13 +1265,20 @@ export const dataWrapper = (data: any) => {
 export function transformObjectKeys(
   obj: Record<string, any>,
   aliasMap: Record<string, string>,
+  // ids of link columns: their values are linked records whose keys are renamed too
+  linkColumnIds?: Set<string>,
 ): Record<string, any> {
   if (!obj || typeof obj !== 'object') return obj;
 
   const result = {};
   Object.entries(obj).forEach(([key, value]) => {
     const alias = aliasMap[key];
-    result[alias || key] = value;
+    result[alias || key] =
+      linkColumnIds?.has(key) && value && typeof value === 'object'
+        ? Array.isArray(value)
+          ? value.map((v) => transformObjectKeys(v, aliasMap, linkColumnIds))
+          : transformObjectKeys(value, aliasMap, linkColumnIds)
+        : value;
   });
   return result;
 }

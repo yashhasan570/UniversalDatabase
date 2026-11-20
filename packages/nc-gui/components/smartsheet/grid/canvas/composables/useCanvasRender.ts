@@ -38,6 +38,8 @@ import { getColumnDropTargetIndex, getDisplayValueDropSlot } from '../utils/head
 import {
   calculateGroupHeight,
   calculateGroupRange,
+  calculateGroupRowPrefetch,
+  calculateGroupRowSlice,
   calculateGroupRowTop,
   comparePath,
   generateGroupPath,
@@ -50,6 +52,7 @@ import type { RenderTagProps } from '../utils/types'
 import { getSafe2DContext } from '../utils/safeCanvas'
 import type { MarkdownLoader } from '../loaders/markdownLoader'
 import type { RowDropTarget } from './useRowReOrder'
+import { cellMatchesSearch } from '~/utils/allFieldsSearchUtils'
 import type { GridRemoteFieldMap, GridRemoteFocus, GridRemoteFocusMap, GridRemoteRecordMap } from '~/lib/types'
 
 export function useCanvasRender({
@@ -273,6 +276,20 @@ export function useCanvasRender({
   }
 
   const { isDark, getColor } = useTheme()
+
+  const searchHighlight = useSmartsheetStore()?.searchHighlight
+
+  /** Tints a cell whose loaded value shows the toolbar search term. */
+  function paintSearchMatch(
+    ctx: CanvasRenderingContext2D,
+    column: CanvasGridColumn,
+    value: unknown,
+    rect: { x: number; y: number; width: number; height: number },
+  ) {
+    if (!cellMatchesSearch(searchHighlight?.value, column.columnObj, value)) return
+    ctx.fillStyle = getColor(themeV4Colors.yellow['100'], themeV4Colors.yellow['900'], 0.7)
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height)
+  }
 
   function renderInterfaceFieldMenuButton(ctx: CanvasRenderingContext2D, x: number, centerY: number) {
     const w = 22
@@ -2111,6 +2128,10 @@ export function useCanvasRender({
           renderRedBorders.push({ rowIndex: rowIdx, column })
         }
 
+        if (!isActive && !isCellInRange && !recordSelected) {
+          paintSearchMatch(ctx, column, value, { x: xOffset - _scrollLeft, y: yOffset, width, height: _rowH })
+        }
+
         renderCell(ctx, column.columnObj, {
           value,
           x: xOffset - _scrollLeft,
@@ -2235,6 +2256,10 @@ export function useCanvasRender({
 
             if (isColumnRequiredAndNull(column.columnObj, row.row)) {
               renderRedBorders.push({ rowIndex: rowIdx, column })
+            }
+
+            if (!isActive && !isCellInRange && !recordSelected) {
+              paintSearchMatch(ctx, column, value, { x: xOffset, y: yOffset, width, height: _rowH })
             }
 
             renderCell(ctx, column.columnObj, {
@@ -3708,6 +3733,9 @@ export function useCanvasRender({
       getRows(minIndex, maxIndex, group.path)
     }
 
+    const prefetch = calculateGroupRowPrefetch(startIndex, endIndex, group.count, dataCache.chunkStates.value)
+    if (prefetch) getRows(prefetch.start, prefetch.end, group.path)
+
     return { yOffset, postRenderCbk }
   }
 
@@ -3834,20 +3862,13 @@ export function useCanvasRender({
           )
 
           if (group.path) {
-            // Calculate visible viewport height from current offset to container bottom
-            const viewportHeight = height.value - tempCurrentOffset
-            const itemHeight = rowHeight.value
-            // Calculate first visible item index, accounting for header height
-            // Math.max ensures no negative indices
-            const nestedStart = Math.min(
+            const { start: nestedStart, end: nestedEnd } = calculateGroupRowSlice(
+              tempCurrentOffset,
               group.count,
-              // Use the negative offset to calculate the start index, as it helps determine how many rows are hidden
-              Math.max(0, Math.floor(-(groupHeaderY + GROUP_HEADER_HEIGHT - _headerRowHeight) / itemHeight)),
+              rowHeight.value,
+              _headerRowHeight,
+              height.value,
             )
-            // Calculate number of visible rows based on viewport height
-            const visibleRowCount = Math.ceil(viewportHeight / itemHeight)
-            // Calculate last visible item index, bounded by total count
-            const nestedEnd = Math.min(nestedStart + visibleRowCount, group.count - 1)
 
             const { yOffset: _tempCurrentOffset, postRenderCbk } = renderGroupRows(
               ctx,
